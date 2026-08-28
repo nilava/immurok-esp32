@@ -69,7 +69,7 @@ void imk_proto_handle(const uint8_t *pkt, size_t len) {
 
   switch (cmd) {
     case CMD_GET_STATUS: {
-      int fp = fingerprint_count();
+      int fp = fingerprint_cached_count();
       uint8_t bitmap = 0;
       for (int i = 0; i < fp && i < 8; i++) bitmap |= (uint8_t)(1u << i);
       uint8_t body[9] = {

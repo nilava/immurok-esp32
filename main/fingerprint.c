@@ -7,8 +7,12 @@
 #include "esp_log.h"
 #include "freertos/FreeRTOS.h"
 #include "freertos/task.h"
+#include "freertos/semphr.h"
 
 static const char *TAG = "fp";
+
+static SemaphoreHandle_t fp_mutex;   // serializes UART access across tasks
+static int cached_count = -1;        // last known template count
 
 // Wiring (XIAO ESP32-S3 <-> ZW101): sensor TX->D7/GPIO44 (MCU RX),
 // RX->D6/GPIO43 (MCU TX), IRQ->D1/GPIO2 (active high). UART1 @ 57600 8N1.
@@ -43,9 +47,9 @@ static const char *TAG = "fp";
 // Send a command packet and read the ack. `data`/`data_len` are the instruction
 // payload; the confirmation code lands in *confirm; any ack data (beyond the
 // confirmation byte) is copied into `resp`/`*resp_len`.
-static bool fp_command(uint8_t instruction, const uint8_t *data, size_t data_len,
-                       uint8_t *confirm, uint8_t *resp, size_t *resp_len,
-                       uint32_t timeout_ms) {
+static bool fp_command_locked(uint8_t instruction, const uint8_t *data, size_t data_len,
+                              uint8_t *confirm, uint8_t *resp, size_t *resp_len,
+                              uint32_t timeout_ms) {
   uint8_t packet[64];
   size_t n = 0;
   packet[n++] = (FP_HEADER >> 8) & 0xff;
@@ -102,7 +106,21 @@ static bool fp_command(uint8_t instruction, const uint8_t *data, size_t data_len
   return false;
 }
 
+// Mutex-guarded wrapper so concurrent tasks (main loop vs BLE-context calls)
+// never interleave UART bytes.
+static bool fp_command(uint8_t instruction, const uint8_t *data, size_t data_len,
+                       uint8_t *confirm, uint8_t *resp, size_t *resp_len,
+                       uint32_t timeout_ms) {
+  if (fp_mutex && xSemaphoreTake(fp_mutex, pdMS_TO_TICKS(timeout_ms + 500)) != pdTRUE) {
+    return false;
+  }
+  bool ok = fp_command_locked(instruction, data, data_len, confirm, resp, resp_len, timeout_ms);
+  if (fp_mutex) xSemaphoreGive(fp_mutex);
+  return ok;
+}
+
 void fingerprint_init(void) {
+  fp_mutex = xSemaphoreCreateMutex();
   gpio_config_t io = {
     .pin_bit_mask = 1ULL << FP_INT_PIN,
     .mode = GPIO_MODE_INPUT,
@@ -163,14 +181,22 @@ void fingerprint_led(uint8_t color, bool steady) {
 }
 
 int fingerprint_count(void) {
-  uint8_t confirm = 0xff;
-  uint8_t data[2];
-  size_t len = sizeof(data);
-  if (!fp_command(CMD_TEMPLATE_NUM, NULL, 0, &confirm, data, &len, 1000) ||
-      confirm != 0x00 || len < 2) {
-    return -1;
+  for (int attempt = 0; attempt < 3; attempt++) {
+    uint8_t confirm = 0xff;
+    uint8_t data[2];
+    size_t len = sizeof(data);
+    if (fp_command(CMD_TEMPLATE_NUM, NULL, 0, &confirm, data, &len, 1000) &&
+        confirm == 0x00 && len >= 2) {
+      cached_count = ((int)data[0] << 8) | data[1];
+      return cached_count;
+    }
+    vTaskDelay(pdMS_TO_TICKS(120));
   }
-  return ((int)data[0] << 8) | data[1];
+  return -1;
+}
+
+int fingerprint_cached_count(void) {
+  return cached_count;
 }
 
 // Capture one image into char buffer `buffer` (1 or 2). Returns true on success.
@@ -269,14 +295,17 @@ bool fingerprint_enroll_stream(uint16_t slot,
   }
   if (progress) progress(0x04, TOTAL, TOTAL);  // complete
   fingerprint_led(0x02, false);
+  fingerprint_count();  // refresh cached_count
   return true;
 }
 
 bool fingerprint_delete(uint16_t slot) {
   uint8_t params[] = {(slot >> 8) & 0xff, slot & 0xff, 0x00, 0x01};
   uint8_t confirm = 0xff;
-  return fp_command(CMD_DELETE_CHAR, params, sizeof(params), &confirm, NULL, NULL, 1500) &&
-         confirm == 0x00;
+  bool ok = fp_command(CMD_DELETE_CHAR, params, sizeof(params), &confirm, NULL, NULL, 1500) &&
+            confirm == 0x00;
+  if (ok) fingerprint_count();
+  return ok;
 }
 
 bool fingerprint_delete_all(void) {
