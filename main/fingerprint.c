@@ -65,29 +65,41 @@ static bool fp_command(uint8_t instruction, const uint8_t *data, size_t data_len
   packet[n++] = (checksum >> 8) & 0xff;
   packet[n++] = checksum & 0xff;
 
-  uart_flush_input(FP_UART);
+  uint8_t drain[64];
+  while (uart_read_bytes(FP_UART, drain, sizeof(drain), 0) > 0) {}
   uart_write_bytes(FP_UART, (const char *)packet, n);
 
-  // Read ack header (9 bytes) then the declared payload.
-  uint8_t head[9];
-  int got = uart_read_bytes(FP_UART, head, sizeof(head), pdMS_TO_TICKS(timeout_ms));
-  if (got != sizeof(head) || head[0] != 0xEF || head[1] != 0x01 || head[6] != PID_ACK) {
-    return false;
+  // Robust receive: bytes may arrive fragmented or with stray leading bytes, so
+  // accumulate into a buffer, resync to the 0xEF01 header, and wait for the full
+  // declared packet before parsing (matches the proven ZW101 driver).
+  uint8_t buf[128];
+  size_t pos = 0;
+  TickType_t start = xTaskGetTickCount();
+  TickType_t deadline = pdMS_TO_TICKS(timeout_ms);
+  while ((xTaskGetTickCount() - start) < deadline) {
+    int got = uart_read_bytes(FP_UART, buf + pos, sizeof(buf) - pos, pdMS_TO_TICKS(10));
+    if (got <= 0) continue;
+    pos += (size_t)got;
+    // Discard bytes until the buffer starts with the 0xEF01 header.
+    while (pos >= 2 && !(buf[0] == 0xEF && buf[1] == 0x01)) {
+      memmove(buf, buf + 1, --pos);
+    }
+    if (pos < 9) continue;
+    uint16_t ack_len = ((uint16_t)buf[7] << 8) | buf[8];  // confirm + data + checksum(2)
+    size_t expected = 9 + ack_len;
+    if (expected > sizeof(buf) || ack_len < 3) return false;
+    if (pos < expected) continue;
+    if (buf[6] != PID_ACK) return false;
+    if (confirm) *confirm = buf[9];
+    size_t payload = ack_len - 3;  // exclude confirm byte + 2 checksum bytes
+    if (resp && resp_len) {
+      size_t copy = payload < *resp_len ? payload : *resp_len;
+      memcpy(resp, buf + 10, copy);
+      *resp_len = copy;
+    }
+    return true;
   }
-  uint16_t ack_len = ((uint16_t)head[7] << 8) | head[8];
-  if (ack_len < 3 || ack_len > 128) return false;  // confirm(1)+data+checksum(2)
-  uint8_t body[128];
-  got = uart_read_bytes(FP_UART, body, ack_len, pdMS_TO_TICKS(timeout_ms));
-  if (got != ack_len) return false;
-
-  if (confirm) *confirm = body[0];
-  size_t payload = ack_len - 3;  // exclude confirm byte + 2 checksum bytes
-  if (resp && resp_len) {
-    size_t copy = payload < *resp_len ? payload : *resp_len;
-    memcpy(resp, body + 1, copy);
-    *resp_len = copy;
-  }
-  return true;
+  return false;
 }
 
 void fingerprint_init(void) {
@@ -110,6 +122,13 @@ void fingerprint_init(void) {
   uart_driver_install(FP_UART, 1024, 0, 0, NULL, 0);
   uart_param_config(FP_UART, &cfg);
   uart_set_pin(FP_UART, FP_TX_PIN, FP_RX_PIN, UART_PIN_NO_CHANGE, UART_PIN_NO_CHANGE);
+
+  // VfyPwd (0x13) with the default all-zero password — some ZW101 units require
+  // this handshake before answering other commands.
+  uint8_t pw[] = {0x00, 0x00, 0x00, 0x00};
+  uint8_t confirm = 0xff;
+  bool verify = fp_command(0x13, pw, sizeof(pw), &confirm, NULL, NULL, 2000) && confirm == 0x00;
+  ESP_LOGI(TAG, "sensor verify: %s (confirm=0x%02x)", verify ? "ok" : "failed", confirm);
 
   int n = fingerprint_count();
   ESP_LOGI(TAG, "sensor init: %d template(s) enrolled", n);
