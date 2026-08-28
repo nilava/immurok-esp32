@@ -99,6 +99,12 @@ static bool fp_command(uint8_t instruction, const uint8_t *data, size_t data_len
     }
     return true;
   }
+  // Timed out. Log what (if anything) arrived: 0 bytes => RX wire/UART problem;
+  // some bytes => framing/protocol mismatch.
+  ESP_LOGW(TAG, "cmd 0x%02x: no valid ack, %u raw byte(s): %02x %02x %02x %02x",
+           instruction, (unsigned)pos,
+           pos > 0 ? buf[0] : 0, pos > 1 ? buf[1] : 0,
+           pos > 2 ? buf[2] : 0, pos > 3 ? buf[3] : 0);
   return false;
 }
 
