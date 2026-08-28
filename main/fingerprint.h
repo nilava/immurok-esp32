@@ -19,6 +19,12 @@ bool fingerprint_search(uint16_t *page_id, uint16_t *score);
 // progress. Returns true on success.
 bool fingerprint_enroll(uint16_t slot, void (*prompt)(const char *msg));
 
+// Streaming enrollment for the immurok protocol. Calls progress() with immurok
+// EnrollEvent status codes as it captures: 0x00 waiting, 0x01 captured,
+// 0x02 processing, 0x03 lift finger, 0x04 complete, 0x06 overlap, 0xFF failed.
+bool fingerprint_enroll_stream(uint16_t slot,
+                               void (*progress)(uint8_t status, uint8_t captured, uint8_t total));
+
 bool fingerprint_delete(uint16_t slot);
 bool fingerprint_delete_all(void);
 

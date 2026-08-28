@@ -56,6 +56,10 @@ void app_main(void) {
   // On a fingerprint touch: during pairing it drives the ECDH pubkey exchange;
   // otherwise it sends an HMAC-signed match notification to the paired host.
   while (true) {
+    if (imk_proto_enroll_requested()) {
+      imk_proto_run_enrollment();
+      continue;
+    }
     if (fingerprint_present()) {
       if (imk_proto_pairing_pending()) {
         // Any live finger confirms physical presence for pairing.

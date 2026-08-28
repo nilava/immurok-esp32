@@ -24,6 +24,8 @@ void imk_proto_on_fingerprint(uint16_t page_id);
 // True while waiting for a fingerprint touch to confirm pairing (so the main
 // loop knows to route the next touch to pairing rather than auth).
 bool imk_proto_pairing_pending(void);
+bool imk_proto_enroll_requested(void);
+void imk_proto_run_enrollment(void);
 
 // Reset transient state on BLE disconnect.
 void imk_proto_on_disconnect(void);

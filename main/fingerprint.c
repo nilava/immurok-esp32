@@ -230,6 +230,48 @@ bool fingerprint_enroll(uint16_t slot, void (*prompt)(const char *msg)) {
   return true;
 }
 
+bool fingerprint_enroll_stream(uint16_t slot,
+                               void (*progress)(uint8_t status, uint8_t captured, uint8_t total)) {
+  const uint8_t TOTAL = 2;  // ZW101 RegModel merges CharBuffer1 + CharBuffer2
+  uint8_t confirm = 0xff;
+
+  for (uint8_t i = 1; i <= TOTAL; i++) {
+    if (progress) progress(0x00, i - 1, TOTAL);  // waiting for finger
+    // Wait for a finger to be present, then capture into buffer i.
+    TickType_t start = xTaskGetTickCount();
+    while (!fingerprint_present()) {
+      if ((xTaskGetTickCount() - start) > pdMS_TO_TICKS(15000)) {
+        if (progress) progress(0xFF, i - 1, TOTAL);
+        return false;
+      }
+      vTaskDelay(pdMS_TO_TICKS(50));
+    }
+    if (!capture_to_buffer(i, 6000)) {
+      if (progress) progress(0xFF, i - 1, TOTAL);
+      return false;
+    }
+    if (progress) progress(0x01, i, TOTAL);  // captured
+    if (i < TOTAL) {
+      if (progress) progress(0x03, i, TOTAL);  // lift finger
+      while (fingerprint_present()) vTaskDelay(pdMS_TO_TICKS(50));
+    }
+  }
+
+  if (progress) progress(0x02, TOTAL, TOTAL);  // processing
+  if (!fp_command(CMD_REG_MODEL, NULL, 0, &confirm, NULL, NULL, 1500) || confirm != 0x00) {
+    if (progress) progress(0xFF, TOTAL, TOTAL);
+    return false;
+  }
+  uint8_t params[] = {0x01, (uint8_t)(slot >> 8), (uint8_t)(slot & 0xff)};
+  if (!fp_command(CMD_STORE, params, sizeof(params), &confirm, NULL, NULL, 1500) || confirm != 0x00) {
+    if (progress) progress(0xFF, TOTAL, TOTAL);
+    return false;
+  }
+  if (progress) progress(0x04, TOTAL, TOTAL);  // complete
+  fingerprint_led(0x02, false);
+  return true;
+}
+
 bool fingerprint_delete(uint16_t slot) {
   uint8_t params[] = {(slot >> 8) & 0xff, slot & 0xff, 0x00, 0x01};
   uint8_t confirm = 0xff;

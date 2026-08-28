@@ -11,6 +11,9 @@ static const char *TAG = "imk_proto";
 
 // Opcodes (immurok protocol subset for Phase 5A).
 #define CMD_GET_STATUS    0x01
+#define CMD_ENROLL_START  0x10
+#define CMD_ENROLL_CANCEL 0x11
+#define CMD_DELETE_FP     0x12
 #define CMD_FP_MATCH_ACK  0x22
 #define CMD_PAIR_INIT     0x30
 #define CMD_PAIR_CONFIRM  0x31
@@ -29,6 +32,8 @@ static const char *TAG = "imk_proto";
 
 static imk_send_fn s_send;
 static bool s_pairing_pending;  // PAIR_INIT received, waiting for a touch
+static volatile bool s_enroll_requested;
+static uint16_t s_enroll_slot;
 
 // Wire format asymmetry (from app-macos/BLEManager.swift): app->device writes
 // are [cmd][len][payload], but device->app responses/notifications are RAW
@@ -119,6 +124,27 @@ void imk_proto_handle(const uint8_t *pkt, size_t len) {
       break;
     }
 
+    case CMD_ENROLL_START: {
+      // [0x10][slot]. First-time enroll needs no FP gate; start immediately.
+      s_enroll_slot = (plen >= 1) ? payload[0] : 1;
+      s_enroll_requested = true;
+      send2(CMD_ENROLL_START, ST_OK);
+      ESP_LOGI(TAG, "ENROLL_START slot=%u", s_enroll_slot);
+      break;
+    }
+
+    case CMD_ENROLL_CANCEL: {
+      s_enroll_requested = false;
+      send2(CMD_ENROLL_CANCEL, ST_OK);
+      break;
+    }
+
+    case CMD_DELETE_FP: {
+      uint16_t slot = (plen >= 1) ? payload[0] : 0;
+      send2(CMD_DELETE_FP, fingerprint_delete(slot) ? ST_OK : ST_ERROR);
+      break;
+    }
+
     case CMD_FP_MATCH_ACK: {
       uint8_t ok = ST_OK;
       send_raw(&ok, 1);
@@ -129,6 +155,23 @@ void imk_proto_handle(const uint8_t *pkt, size_t len) {
       send2(cmd, ST_ERROR);
       break;
   }
+}
+
+static void enroll_progress(uint8_t status, uint8_t captured, uint8_t total) {
+  // immurok enrollment notification: [0x11][status][captured][total].
+  uint8_t n[4] = {0x11, status, captured, total};
+  send_raw(n, sizeof(n));
+}
+
+bool imk_proto_enroll_requested(void) { return s_enroll_requested; }
+
+// Runs the (blocking) streaming enrollment. Call from the main loop, not the
+// BLE callback, so captures don't stall the stack.
+void imk_proto_run_enrollment(void) {
+  if (!s_enroll_requested) return;
+  s_enroll_requested = false;
+  ESP_LOGI(TAG, "running enrollment into slot %u", s_enroll_slot);
+  fingerprint_enroll_stream(s_enroll_slot, enroll_progress);
 }
 
 void imk_proto_on_fingerprint(uint16_t page_id) {
