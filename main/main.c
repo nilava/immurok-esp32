@@ -1,13 +1,36 @@
 #include "esp_log.h"
+#include "esp_system.h"
 #include "freertos/FreeRTOS.h"
 #include "freertos/task.h"
 #include "nvs_flash.h"
+#include "driver/usb_serial_jtag.h"
+#include "soc/rtc_cntl_reg.h"
 
 #include "fingerprint.h"
 
 static const char *TAG = "immurok";
 
 static void prompt(const char *msg) { ESP_LOGI("enroll", "%s", msg); }
+
+// Console input over USB-Serial-JTAG: type 'd' in the monitor to reboot straight
+// into ROM download mode (no BOOT/RESET buttons), 'r' to just restart.
+static void console_task(void *arg) {
+  (void)arg;
+  uint8_t c;
+  while (true) {
+    if (usb_serial_jtag_read_bytes(&c, 1, portMAX_DELAY) != 1) continue;
+    if (c == 'd' || c == 'D') {
+      ESP_LOGW(TAG, "rebooting into download mode…");
+      vTaskDelay(pdMS_TO_TICKS(80));
+      REG_WRITE(RTC_CNTL_OPTION1_REG, RTC_CNTL_FORCE_DOWNLOAD_BOOT);
+      esp_restart();
+    } else if (c == 'r' || c == 'R') {
+      ESP_LOGW(TAG, "restarting…");
+      vTaskDelay(pdMS_TO_TICKS(80));
+      esp_restart();
+    }
+  }
+}
 
 void app_main(void) {
   esp_err_t nvs = nvs_flash_init();
@@ -16,8 +39,12 @@ void app_main(void) {
     ESP_ERROR_CHECK(nvs_flash_init());
   }
 
+  usb_serial_jtag_driver_config_t ucfg = USB_SERIAL_JTAG_DRIVER_CONFIG_DEFAULT();
+  usb_serial_jtag_driver_install(&ucfg);
+  xTaskCreate(console_task, "console", 3072, NULL, 5, NULL);
+
   fingerprint_init();
-  ESP_LOGI(TAG, "immurok-esp32 boot; fingerprint self-test running");
+  ESP_LOGI(TAG, "immurok-esp32 boot; type 'd' to enter download mode");
 
   // Phase 5.0 bring-up: if no prints enrolled, enroll one into slot 1, then loop
   // searching so you can confirm the ZW101 works before BLE goes in.
