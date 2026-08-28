@@ -67,7 +67,9 @@ static bool fp_command(uint8_t instruction, const uint8_t *data, size_t data_len
 
   uint8_t drain[64];
   while (uart_read_bytes(FP_UART, drain, sizeof(drain), 0) > 0) {}
-  uart_write_bytes(FP_UART, (const char *)packet, n);
+  int wrote = uart_write_bytes(FP_UART, (const char *)packet, n);
+  static bool logged_write;
+  if (!logged_write) { logged_write = true; ESP_LOGI(TAG, "first write: %d/%u bytes", wrote, (unsigned)n); }
 
   // Robust receive: bytes may arrive fragmented or with stray leading bytes, so
   // accumulate into a buffer, resync to the 0xEF01 header, and wait for the full
@@ -125,9 +127,12 @@ void fingerprint_init(void) {
     .flow_ctrl = UART_HW_FLOWCTRL_DISABLE,
     .source_clk = UART_SCLK_DEFAULT,
   };
-  uart_driver_install(FP_UART, 1024, 0, 0, NULL, 0);
-  uart_param_config(FP_UART, &cfg);
-  uart_set_pin(FP_UART, FP_TX_PIN, FP_RX_PIN, UART_PIN_NO_CHANGE, UART_PIN_NO_CHANGE);
+  esp_err_t e_inst = uart_driver_install(FP_UART, 1024, 0, 0, NULL, 0);
+  esp_err_t e_cfg = uart_param_config(FP_UART, &cfg);
+  esp_err_t e_pin = uart_set_pin(FP_UART, FP_TX_PIN, FP_RX_PIN, UART_PIN_NO_CHANGE, UART_PIN_NO_CHANGE);
+  ESP_LOGI(TAG, "uart install=%s config=%s setpin=%s (tx=%d rx=%d)",
+           esp_err_to_name(e_inst), esp_err_to_name(e_cfg), esp_err_to_name(e_pin),
+           FP_TX_PIN, FP_RX_PIN);
 
   // VfyPwd (0x13) with the default all-zero password — some ZW101 units require
   // this handshake before answering other commands.
