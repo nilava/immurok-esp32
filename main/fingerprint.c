@@ -97,6 +97,11 @@ static bool fp_command_locked(uint8_t instruction, const uint8_t *data, size_t d
     if (buf[6] != PID_ACK) return false;
     if (confirm) *confirm = buf[9];
     size_t payload = ack_len - 3;  // exclude confirm byte + 2 checksum bytes
+    if (instruction == CMD_SEARCH) {
+      ESP_LOGI(TAG, "search ack: ack_len=%u payload=%u raw= %02x %02x %02x %02x %02x %02x",
+               ack_len, (unsigned)payload,
+               buf[9], buf[10], buf[11], buf[12], buf[13], buf[14]);
+    }
     if (resp && resp_len) {
       size_t copy = payload < *resp_len ? payload : *resp_len;
       memcpy(resp, buf + 10, copy);
