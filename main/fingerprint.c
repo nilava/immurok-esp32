@@ -40,8 +40,9 @@ static int cached_count = -1;        // last known template count
 #define CMD_TEMPLATE_NUM 0x1D
 #define CMD_AURA_LED     0x3C
 
-// Search across this slot range (ZW101 default library is 1..N).
-#define SLOT_START 1
+// Search across this slot range. The immurok app enrolls 0-based (slot 0), so
+// start at 0 to cover app-enrolled templates as well as legacy 1-based ones.
+#define SLOT_START 0
 #define SLOT_END   50
 
 // Send a command packet and read the ack. `data`/`data_len` are the instruction
@@ -217,15 +218,19 @@ static bool capture_to_buffer(uint8_t buffer, uint32_t wait_ms) {
 }
 
 bool fingerprint_search(uint16_t *page_id, uint16_t *score) {
-  if (!capture_to_buffer(1, 400)) return false;
+  if (!capture_to_buffer(1, 800)) {
+    ESP_LOGW(TAG, "search: capture failed");
+    return false;
+  }
   uint8_t params[] = {0x01, (SLOT_START >> 8) & 0xff, SLOT_START & 0xff,
                       ((SLOT_END - SLOT_START + 1) >> 8) & 0xff,
                       (SLOT_END - SLOT_START + 1) & 0xff};
   uint8_t confirm = 0xff;
   uint8_t data[4];
   size_t len = sizeof(data);
-  if (!fp_command(CMD_SEARCH, params, sizeof(params), &confirm, data, &len, 2000) ||
-      confirm != 0x00 || len < 4) {
+  bool got = fp_command(CMD_SEARCH, params, sizeof(params), &confirm, data, &len, 2000);
+  ESP_LOGI(TAG, "search: cmd=%d confirm=0x%02x len=%u", got, confirm, (unsigned)len);
+  if (!got || confirm != 0x00 || len < 4) {
     fingerprint_led(0x04, false);  // red flash on no-match
     return false;
   }
