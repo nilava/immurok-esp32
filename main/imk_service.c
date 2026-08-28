@@ -123,14 +123,14 @@ static bool s_connected;
 static bool s_notify_enabled;
 static int s_stage;  // which service table is being created
 
+// Advertise flags + name + keyboard appearance + the 16-bit HID service UUID
+// (all fits in 31 bytes) so macOS lists it as a keyboard.
+static uint16_t hid_adv_uuid = ESP_GATT_UUID_HID_SVC;
 static esp_ble_adv_data_t adv_data = {
   .set_scan_rsp = false, .include_name = true, .include_txpower = false,
   .appearance = APPEARANCE_KEYBOARD,
+  .service_uuid_len = 2, .p_service_uuid = (uint8_t *)&hid_adv_uuid,
   .flag = (ESP_BLE_ADV_FLAG_GEN_DISC | ESP_BLE_ADV_FLAG_BREDR_NOT_SPT),
-};
-static uint16_t hid_adv_uuid = ESP_GATT_UUID_HID_SVC;
-static esp_ble_adv_data_t scan_rsp = {
-  .set_scan_rsp = true, .service_uuid_len = 2, .p_service_uuid = (uint8_t *)&hid_adv_uuid,
 };
 static esp_ble_adv_params_t adv_params = {
   .adv_int_min = 0x20, .adv_int_max = 0x40, .adv_type = ADV_TYPE_IND,
@@ -158,9 +158,6 @@ static void create_next_table(esp_gatt_if_t gatts_if) {
 static void gap_handler(esp_gap_ble_cb_event_t event, esp_ble_gap_cb_param_t *param) {
   switch (event) {
     case ESP_GAP_BLE_ADV_DATA_SET_COMPLETE_EVT:
-      esp_ble_gap_config_adv_data(&scan_rsp);
-      break;
-    case ESP_GAP_BLE_SCAN_RSP_DATA_SET_COMPLETE_EVT:
       esp_ble_gap_start_advertising(&adv_params);
       break;
     case ESP_GAP_BLE_ADV_START_COMPLETE_EVT:
