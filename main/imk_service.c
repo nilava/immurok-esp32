@@ -123,13 +123,19 @@ static bool s_connected;
 static bool s_notify_enabled;
 static int s_stage;  // which service table is being created
 
-// Advertise flags + name + keyboard appearance + the 16-bit HID service UUID
-// (all fits in 31 bytes) so macOS lists it as a keyboard.
-static uint16_t hid_adv_uuid = ESP_GATT_UUID_HID_SVC;
+// Advertise flags + name + keyboard appearance + the HID service UUID so macOS
+// lists it as a keyboard. Bluedroid requires service UUIDs in 128-bit form
+// (service_uuid_len must be a multiple of 16) and compresses SIG-base UUIDs to
+// 16-bit in the actual packet — a 2-byte UUID here makes config_adv_data fail
+// with INVALID_ARG and advertising never starts.
+static const uint8_t hid_adv_uuid128[16] = {
+  0xfb, 0x34, 0x9b, 0x5f, 0x80, 0x00, 0x00, 0x80,
+  0x00, 0x10, 0x00, 0x00, 0x12, 0x18, 0x00, 0x00};
 static esp_ble_adv_data_t adv_data = {
   .set_scan_rsp = false, .include_name = true, .include_txpower = false,
   .appearance = APPEARANCE_KEYBOARD,
-  .service_uuid_len = 2, .p_service_uuid = (uint8_t *)&hid_adv_uuid,
+  .service_uuid_len = sizeof(hid_adv_uuid128),
+  .p_service_uuid = (uint8_t *)hid_adv_uuid128,
   .flag = (ESP_BLE_ADV_FLAG_GEN_DISC | ESP_BLE_ADV_FLAG_BREDR_NOT_SPT),
 };
 static esp_ble_adv_params_t adv_params = {
@@ -182,7 +188,8 @@ static void gatts_handler(esp_gatts_cb_event_t event, esp_gatt_if_t gatts_if,
     case ESP_GATTS_REG_EVT:
       s_gatts_if = gatts_if;
       esp_ble_gap_set_device_name(DEVICE_NAME);
-      esp_ble_gap_config_adv_data(&adv_data);
+      esp_err_t adv_rc = esp_ble_gap_config_adv_data(&adv_data);
+      if (adv_rc != ESP_OK) ESP_LOGE(TAG, "config_adv_data failed: %s", esp_err_to_name(adv_rc));
       s_stage = 0;
       create_next_table(gatts_if);
       break;
