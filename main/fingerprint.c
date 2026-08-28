@@ -331,12 +331,16 @@ bool fingerprint_enroll_stream(uint16_t slot,
   }
 
   if (progress) progress(0x02, TOTAL, TOTAL);  // processing
-  if (!fp_command(CMD_REG_MODEL, NULL, 0, &confirm, NULL, NULL, 1500) || confirm != 0x00) {
+  bool rm = fp_command(CMD_REG_MODEL, NULL, 0, &confirm, NULL, NULL, 1500);
+  ESP_LOGI(TAG, "enroll RegModel: ok=%d confirm=0x%02x", rm, confirm);
+  if (!rm || confirm != 0x00) {
     if (progress) progress(0xFF, TOTAL, TOTAL);
     return false;
   }
   uint8_t params[] = {0x01, (uint8_t)(slot >> 8), (uint8_t)(slot & 0xff)};
-  if (!fp_command(CMD_STORE, params, sizeof(params), &confirm, NULL, NULL, 1500) || confirm != 0x00) {
+  bool st = fp_command(CMD_STORE, params, sizeof(params), &confirm, NULL, NULL, 1500);
+  ESP_LOGI(TAG, "enroll Store page %u: ok=%d confirm=0x%02x", slot, st, confirm);
+  if (!st || confirm != 0x00) {
     if (progress) progress(0xFF, TOTAL, TOTAL);
     return false;
   }
