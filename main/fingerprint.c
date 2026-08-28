@@ -100,11 +100,6 @@ static bool fp_command_locked(uint8_t instruction, const uint8_t *data, size_t d
     if (buf[6] != PID_ACK) return false;
     if (confirm) *confirm = buf[9];
     size_t payload = ack_len - 3;  // exclude confirm byte + 2 checksum bytes
-    if (instruction == CMD_SEARCH) {
-      ESP_LOGI(TAG, "search ack: ack_len=%u payload=%u raw= %02x %02x %02x %02x %02x %02x",
-               ack_len, (unsigned)payload,
-               buf[9], buf[10], buf[11], buf[12], buf[13], buf[14]);
-    }
     if (resp && resp_len) {
       size_t copy = payload < *resp_len ? payload : *resp_len;
       memcpy(resp, buf + 10, copy);
@@ -230,22 +225,52 @@ bool fingerprint_search(uint16_t *page_id, uint16_t *score) {
     ESP_LOGW(TAG, "search: capture failed");
     return false;
   }
+
+  // Try the Search (0x04) fast path first.
   uint8_t params[] = {0x01, (SLOT_START >> 8) & 0xff, SLOT_START & 0xff,
                       ((SLOT_END - SLOT_START + 1) >> 8) & 0xff,
                       (SLOT_END - SLOT_START + 1) & 0xff};
   uint8_t confirm = 0xff;
   uint8_t data[4];
   size_t len = sizeof(data);
-  bool got = fp_command(CMD_SEARCH, params, sizeof(params), &confirm, data, &len, 2000);
-  ESP_LOGI(TAG, "search: cmd=%d confirm=0x%02x len=%u", got, confirm, (unsigned)len);
-  if (!got || confirm != 0x00 || len < 4) {
-    fingerprint_led(0x04, false);  // red flash on no-match
-    return false;
+  if (fp_command(CMD_SEARCH, params, sizeof(params), &confirm, data, &len, 2000) &&
+      confirm == 0x00 && len >= 4) {
+    uint16_t s = ((uint16_t)data[2] << 8) | data[3];
+    if (s > 0) {
+      if (page_id) *page_id = ((uint16_t)data[0] << 8) | data[1];
+      if (score) *score = s;
+      fingerprint_led(0x02, false);
+      return true;
+    }
   }
-  if (page_id) *page_id = ((uint16_t)data[0] << 8) | data[1];
-  if (score) *score = ((uint16_t)data[2] << 8) | data[3];
-  fingerprint_led(0x02, false);  // green flash on match
-  return true;
+
+  // This ZW101 firmware returns Search as confirm-only (no page/score), so fall
+  // back to per-slot LoadChar (0x07) into buffer 2 + Match (0x03), which is what
+  // actually reports the matched slot on this sensor.
+  for (uint16_t slot = 0; slot <= 15; slot++) {
+    uint8_t load[] = {0x02, (uint8_t)(slot >> 8), (uint8_t)(slot & 0xff)};
+    confirm = 0xff;
+    if (!fp_command(CMD_LOAD_CHAR, load, sizeof(load), &confirm, NULL, NULL, 1000) ||
+        confirm != 0x00) {
+      continue;  // empty slot
+    }
+    uint8_t mdata[2];
+    size_t mlen = sizeof(mdata);
+    confirm = 0xff;
+    if (fp_command(CMD_MATCH, NULL, 0, &confirm, mdata, &mlen, 1000) &&
+        confirm == 0x00 && mlen >= 2) {
+      uint16_t s = ((uint16_t)mdata[0] << 8) | mdata[1];
+      if (s > 0) {
+        if (page_id) *page_id = slot;
+        if (score) *score = s;
+        fingerprint_led(0x02, false);
+        return true;
+      }
+    }
+  }
+
+  fingerprint_led(0x04, false);  // red flash on no match
+  return false;
 }
 
 bool fingerprint_enroll(uint16_t slot, void (*prompt)(const char *msg)) {
