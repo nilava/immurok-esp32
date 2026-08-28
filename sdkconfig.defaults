@@ -17,3 +17,6 @@ CONFIG_BT_GATTS_ENABLE=y
 CONFIG_ESP_CONSOLE_USB_SERIAL_JTAG=y
 
 # mbedTLS: ECDH P-256 + HMAC are default-on; keep the cert bundle off (not needed)
+
+# HKDF for immurok shared-key derivation
+CONFIG_MBEDTLS_HKDF_C=y

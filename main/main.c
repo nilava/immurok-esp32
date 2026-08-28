@@ -7,6 +7,9 @@
 #include "soc/rtc_cntl_reg.h"
 
 #include "fingerprint.h"
+#include "imk_crypto.h"
+#include "imk_proto.h"
+#include "imk_service.h"
 
 static const char *TAG = "immurok";
 
@@ -44,23 +47,27 @@ void app_main(void) {
   xTaskCreate(console_task, "console", 3072, NULL, 5, NULL);
 
   fingerprint_init();
+  imk_crypto_init();
+  imk_proto_init(imk_service_respond);
+  imk_service_start();
   ESP_LOGI(TAG, "immurok-esp32 boot; type 'd' to enter download mode");
+  (void)prompt;
 
-  // Phase 5.0 bring-up: if no prints enrolled, enroll one into slot 1, then loop
-  // searching so you can confirm the ZW101 works before BLE goes in.
-  if (fingerprint_count() == 0) {
-    ESP_LOGW(TAG, "no templates enrolled; enrolling into slot 1");
-    if (fingerprint_enroll(1, prompt)) ESP_LOGI(TAG, "enroll OK");
-    else ESP_LOGE(TAG, "enroll failed");
-  }
-
+  // On a fingerprint touch: during pairing it drives the ECDH pubkey exchange;
+  // otherwise it sends an HMAC-signed match notification to the paired host.
   while (true) {
     if (fingerprint_present()) {
-      uint16_t page = 0, score = 0;
-      if (fingerprint_search(&page, &score)) {
-        ESP_LOGI(TAG, "MATCH slot=%u score=%u", page, score);
+      if (imk_proto_pairing_pending()) {
+        // Any live finger confirms physical presence for pairing.
+        imk_proto_on_fingerprint(0);
       } else {
-        ESP_LOGW(TAG, "no match");
+        uint16_t page = 0, score = 0;
+        if (fingerprint_search(&page, &score)) {
+          ESP_LOGI(TAG, "MATCH slot=%u score=%u", page, score);
+          imk_proto_on_fingerprint(page);
+        } else {
+          ESP_LOGW(TAG, "no match");
+        }
       }
       while (fingerprint_present()) vTaskDelay(pdMS_TO_TICKS(50));
     }
