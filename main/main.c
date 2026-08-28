@@ -64,6 +64,8 @@ void app_main(void) {
   while (true) {
     if (imk_proto_enroll_requested()) {
       imk_proto_run_enrollment();
+      vTaskDelay(pdMS_TO_TICKS(800));  // hold the green "enrolled" beat
+      fingerprint_led_idle();
       continue;
     }
     if (fingerprint_present()) {
@@ -80,6 +82,9 @@ void app_main(void) {
         }
       }
       while (fingerprint_present()) vTaskDelay(pdMS_TO_TICKS(50));
+      // Let the green/red result linger a beat, then return to idle breathing.
+      vTaskDelay(pdMS_TO_TICKS(350));
+      fingerprint_led_idle();
     }
     vTaskDelay(pdMS_TO_TICKS(80));
   }

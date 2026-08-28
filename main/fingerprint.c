@@ -173,7 +173,7 @@ void fingerprint_init(void) {
 
   int n = fingerprint_count();
   ESP_LOGI(TAG, "sensor init: %d template(s) enrolled", n);
-  fingerprint_led(0x03, true);  // purple idle
+  fingerprint_led_idle();  // calm purple breathing
 }
 
 bool fingerprint_present(void) {
@@ -182,11 +182,22 @@ bool fingerprint_present(void) {
 
 void fingerprint_led(uint8_t color, bool steady) {
   // Aura params: [function][speed/start][color][cycles]. fn 3=steady, 2=flash.
-  uint8_t params[] = {(uint8_t)(steady ? 3 : 2), (uint8_t)(steady ? color : 40),
-                      color, (uint8_t)(steady ? 0 : 2)};
+  // Flash is slowed (speed 128) to a single clean blink rather than a frantic one.
+  uint8_t params[] = {(uint8_t)(steady ? 3 : 2), (uint8_t)(steady ? color : 128),
+                      color, (uint8_t)(steady ? 0 : 1)};
   uint8_t confirm = 0xff;
   fp_command(CMD_AURA_LED, params, sizeof(params), &confirm, NULL, NULL, 1000);
 }
+
+// Continuous gentle breathing — used for idle (purple) and "waiting to enroll"
+// (blue). fn 1 = breathing, cycles 0 = run until the next aura command.
+void fingerprint_led_breathe(uint8_t color) {
+  uint8_t params[] = {1, 100, color, 0};
+  uint8_t confirm = 0xff;
+  fp_command(CMD_AURA_LED, params, sizeof(params), &confirm, NULL, NULL, 1000);
+}
+
+void fingerprint_led_idle(void) { fingerprint_led_breathe(0x03); }  // purple
 
 int fingerprint_count(void) {
   for (int attempt = 0; attempt < 3; attempt++) {
@@ -243,7 +254,7 @@ bool fingerprint_search(uint16_t *page_id, uint16_t *score) {
     if (s >= MATCH_MIN_SCORE) {
       if (page_id) *page_id = ((uint16_t)data[0] << 8) | data[1];
       if (score) *score = s;
-      fingerprint_led(0x02, false);
+      fingerprint_led(0x02, true);  // steady green: matched
       return true;
     }
   }
@@ -268,13 +279,13 @@ bool fingerprint_search(uint16_t *page_id, uint16_t *score) {
       if (s >= MATCH_MIN_SCORE) {
         if (page_id) *page_id = slot;
         if (score) *score = s;
-        fingerprint_led(0x02, false);
+        fingerprint_led(0x02, true);  // steady green: matched
         return true;
       }
     }
   }
 
-  fingerprint_led(0x04, false);  // red flash on no match
+  fingerprint_led(0x04, true);  // steady red: no match
   return false;
 }
 
@@ -306,6 +317,7 @@ bool fingerprint_enroll_stream(uint16_t slot,
 
   for (uint8_t i = 1; i <= TOTAL; i++) {
     if (progress) progress(0x00, i - 1, TOTAL);  // waiting for finger
+    fingerprint_led_breathe(0x01);  // blue breathing: waiting for a finger
     ESP_LOGI(TAG, "enroll: waiting for finger %u/%u", i, TOTAL);
     // Wait for a finger to be present, then capture into buffer i.
     TickType_t start = xTaskGetTickCount();
@@ -345,7 +357,7 @@ bool fingerprint_enroll_stream(uint16_t slot,
     return false;
   }
   if (progress) progress(0x04, TOTAL, TOTAL);  // complete
-  fingerprint_led(0x02, false);
+  fingerprint_led(0x02, true);  // steady green: enrolled
   fingerprint_count();  // refresh cached_count
   return true;
 }

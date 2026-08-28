@@ -34,5 +34,10 @@ int fingerprint_cached_count(void);  // last known count, no UART access
 uint8_t fingerprint_index_bitmap(void);  // bit i set = slot i enrolled (slots 0..7)
 
 // Ring LED (aura). color is a 3-bit mask: blue 0x01, green 0x02, red 0x04
-// (purple 0x03, white 0x07). steady=true holds; steady=false flashes.
+// (purple 0x03, white 0x07). steady=true holds; steady=false = one clean blink.
 void fingerprint_led(uint8_t color, bool steady);
+
+// Continuous gentle breathing in `color` until the next aura command.
+void fingerprint_led_breathe(uint8_t color);
+// Calm purple breathing — the resting/idle animation.
+void fingerprint_led_idle(void);

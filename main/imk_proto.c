@@ -21,6 +21,7 @@ static const char *TAG = "imk_proto";
 #define CMD_PAIR_INIT     0x30
 #define CMD_PAIR_CONFIRM  0x31
 #define CMD_PAIR_STATUS   0x32
+#define CMD_AUTH_REQUEST  0x33
 #define CMD_CHALLENGE     0x38
 #define CMD_SLOT_STATUS   0x39
 #define CMD_SLOT_CLEAR    0x3C
@@ -39,6 +40,13 @@ static imk_send_fn s_send;
 static bool s_pairing_pending;  // PAIR_INIT received, waiting for a touch
 static volatile bool s_enroll_requested;
 static uint16_t s_enroll_slot;
+
+// Fingerprint gate: sensitive ops (enroll-with-existing-prints, auth/test) first
+// require verifying an already-enrolled finger. Reply WAIT_FP, wait for a touch
+// that produces a signed [0x21] the app verifies, then FP_MATCH_ACK runs the op.
+typedef enum { GATE_NONE, GATE_AUTH, GATE_ENROLL } gate_t;
+static gate_t s_gate;
+static uint16_t s_gate_enroll_page;
 
 // Wire format asymmetry (from app-macos/BLEManager.swift): app->device writes
 // are [cmd][len][payload], but device->app responses/notifications are RAW
@@ -62,6 +70,7 @@ bool imk_proto_pairing_pending(void) { return s_pairing_pending; }
 
 void imk_proto_on_disconnect(void) {
   s_pairing_pending = false;
+  s_gate = GATE_NONE;
   imk_pair_abort();
 }
 
@@ -113,6 +122,13 @@ void imk_proto_handle(const uint8_t *pkt, size_t len) {
       break;
     }
 
+    case CMD_AUTH_REQUEST: {
+      s_gate = GATE_AUTH;
+      send2(CMD_AUTH_REQUEST, ST_WAIT_FP);
+      ESP_LOGI(TAG, "AUTH_REQUEST: gate (touch to verify)");
+      break;
+    }
+
     case CMD_CHALLENGE: {
       // [0x38][nonce:8] → [0x38][hmac:8]
       uint8_t hmac[8];
@@ -130,10 +146,20 @@ void imk_proto_handle(const uint8_t *pkt, size_t len) {
     case CMD_ENROLL_START: {
       // [0x10][slot]. First-time enroll needs no FP gate; start immediately.
       uint8_t app_slot = (plen >= 1) ? payload[0] : 0;
-      s_enroll_slot = app_slot + 1;  // sensor page (page 0 is unusable)
-      s_enroll_requested = true;
-      send2(CMD_ENROLL_START, ST_OK);
-      ESP_LOGI(TAG, "ENROLL_START app_slot=%u -> sensor page=%u", app_slot, s_enroll_slot);
+      uint16_t page = app_slot + 1;  // sensor page (page 0 is unusable)
+      if (fingerprint_cached_count() > 0) {
+        // Existing prints: require verifying an enrolled finger first.
+        s_gate = GATE_ENROLL;
+        s_gate_enroll_page = page;
+        send2(CMD_ENROLL_START, ST_WAIT_FP);
+        ESP_LOGI(TAG, "ENROLL_START app_slot=%u: gate (verify enrolled finger) -> page %u",
+                 app_slot, page);
+      } else {
+        s_enroll_slot = page;
+        s_enroll_requested = true;
+        send2(CMD_ENROLL_START, ST_OK);
+        ESP_LOGI(TAG, "ENROLL_START app_slot=%u -> sensor page=%u (first enroll)", app_slot, page);
+      }
       break;
     }
 
@@ -173,6 +199,15 @@ void imk_proto_handle(const uint8_t *pkt, size_t len) {
     }
 
     case CMD_FP_MATCH_ACK: {
+      if (s_gate == GATE_ENROLL) {
+        s_gate = GATE_NONE;
+        s_enroll_slot = s_gate_enroll_page;
+        s_enroll_requested = true;  // main loop starts the actual enrollment
+        ESP_LOGI(TAG, "gate passed; starting enrollment into page %u", s_enroll_slot);
+      } else if (s_gate == GATE_AUTH) {
+        s_gate = GATE_NONE;
+        ESP_LOGI(TAG, "gate passed (auth/test)");
+      }
       uint8_t ok = ST_OK;
       send_raw(&ok, 1);
       break;
