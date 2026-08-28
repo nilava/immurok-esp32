@@ -134,6 +134,19 @@ void fingerprint_init(void) {
            esp_err_to_name(e_inst), esp_err_to_name(e_cfg), esp_err_to_name(e_pin),
            FP_TX_PIN, FP_RX_PIN);
 
+  // Internal loopback self-test: routes TX->RX inside the peripheral, so it
+  // proves whether UART1's receive path works at all, independent of wiring.
+  uart_set_loop_back(FP_UART, true);
+  uart_flush_input(FP_UART);
+  const uint8_t probe[4] = {0xAA, 0x55, 0x12, 0x34};
+  uart_write_bytes(FP_UART, probe, sizeof(probe));
+  uint8_t back[4] = {0};
+  int lb = uart_read_bytes(FP_UART, back, sizeof(back), pdMS_TO_TICKS(200));
+  ESP_LOGI(TAG, "loopback: read %d bytes: %02x %02x %02x %02x", lb,
+           back[0], back[1], back[2], back[3]);
+  uart_set_loop_back(FP_UART, false);
+  uart_flush_input(FP_UART);
+
   // VfyPwd (0x13) with the default all-zero password — some ZW101 units require
   // this handshake before answering other commands.
   uint8_t pw[] = {0x00, 0x00, 0x00, 0x00};
