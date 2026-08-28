@@ -164,6 +164,7 @@ void imk_proto_handle(const uint8_t *pkt, size_t len) {
 
 static void enroll_progress(uint8_t status, uint8_t captured, uint8_t total) {
   // immurok enrollment notification: [0x11][status][captured][total].
+  ESP_LOGI(TAG, "enroll progress: status=0x%02x captured=%u/%u", status, captured, total);
   uint8_t n[4] = {0x11, status, captured, total};
   send_raw(n, sizeof(n));
 }

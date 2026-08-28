@@ -305,16 +305,20 @@ bool fingerprint_enroll_stream(uint16_t slot,
 
   for (uint8_t i = 1; i <= TOTAL; i++) {
     if (progress) progress(0x00, i - 1, TOTAL);  // waiting for finger
+    ESP_LOGI(TAG, "enroll: waiting for finger %u/%u", i, TOTAL);
     // Wait for a finger to be present, then capture into buffer i.
     TickType_t start = xTaskGetTickCount();
     while (!fingerprint_present()) {
       if ((xTaskGetTickCount() - start) > pdMS_TO_TICKS(15000)) {
+        ESP_LOGW(TAG, "enroll: timed out waiting for finger");
         if (progress) progress(0xFF, i - 1, TOTAL);
         return false;
       }
       vTaskDelay(pdMS_TO_TICKS(50));
     }
+    ESP_LOGI(TAG, "enroll: finger detected, capturing to buffer %u", i);
     if (!capture_to_buffer(i, 6000)) {
+      ESP_LOGW(TAG, "enroll: capture %u failed", i);
       if (progress) progress(0xFF, i - 1, TOTAL);
       return false;
     }
