@@ -177,7 +177,9 @@ void imk_proto_run_enrollment(void) {
   if (!s_enroll_requested) return;
   s_enroll_requested = false;
   ESP_LOGI(TAG, "running enrollment into slot %u", s_enroll_slot);
-  fingerprint_enroll_stream(s_enroll_slot, enroll_progress);
+  bool ok = fingerprint_enroll_stream(s_enroll_slot, enroll_progress);
+  ESP_LOGI(TAG, "enroll %s; count=%d bitmap=0x%02x",
+           ok ? "ok" : "FAIL", fingerprint_count(), fingerprint_index_bitmap());
 }
 
 void imk_proto_on_fingerprint(uint16_t page_id) {
