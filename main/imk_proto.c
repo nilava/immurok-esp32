@@ -14,6 +14,7 @@ static const char *TAG = "imk_proto";
 #define CMD_ENROLL_START  0x10
 #define CMD_ENROLL_CANCEL 0x11
 #define CMD_DELETE_FP     0x12
+#define CMD_FP_LIST       0x13
 #define CMD_FP_MATCH_ACK  0x22
 #define CMD_PAIR_INIT     0x30
 #define CMD_PAIR_CONFIRM  0x31
@@ -69,9 +70,7 @@ void imk_proto_handle(const uint8_t *pkt, size_t len) {
 
   switch (cmd) {
     case CMD_GET_STATUS: {
-      int fp = fingerprint_cached_count();
-      uint8_t bitmap = 0;
-      for (int i = 0; i < fp && i < 8; i++) bitmap |= (uint8_t)(1u << i);
+      uint8_t bitmap = fingerprint_index_bitmap();
       uint8_t body[9] = {
         ST_OK, bitmap,
         (uint8_t)(imk_crypto_is_paired() ? 1 : 0),
@@ -142,6 +141,12 @@ void imk_proto_handle(const uint8_t *pkt, size_t len) {
     case CMD_DELETE_FP: {
       uint16_t slot = (plen >= 1) ? payload[0] : 0;
       send2(CMD_DELETE_FP, fingerprint_delete(slot) ? ST_OK : ST_ERROR);
+      break;
+    }
+
+    case CMD_FP_LIST: {
+      uint8_t body[2] = {ST_OK, fingerprint_index_bitmap()};
+      send_raw(body, sizeof(body));
       break;
     }
 

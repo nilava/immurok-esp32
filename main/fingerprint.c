@@ -38,7 +38,11 @@ static int cached_count = -1;        // last known template count
 #define CMD_DELETE_CHAR  0x0C
 #define CMD_EMPTY        0x0D
 #define CMD_TEMPLATE_NUM 0x1D
+#define CMD_READ_INDEX   0x1F
 #define CMD_AURA_LED     0x3C
+
+// Minimum match score to accept (rejects weak/false matches like a stray score=1).
+#define MATCH_MIN_SCORE 50
 
 // Search across this slot range. The immurok app enrolls 0-based (slot 0), so
 // start at 0 to cover app-enrolled templates as well as legacy 1-based ones.
@@ -236,7 +240,7 @@ bool fingerprint_search(uint16_t *page_id, uint16_t *score) {
   if (fp_command(CMD_SEARCH, params, sizeof(params), &confirm, data, &len, 2000) &&
       confirm == 0x00 && len >= 4) {
     uint16_t s = ((uint16_t)data[2] << 8) | data[3];
-    if (s > 0) {
+    if (s >= MATCH_MIN_SCORE) {
       if (page_id) *page_id = ((uint16_t)data[0] << 8) | data[1];
       if (score) *score = s;
       fingerprint_led(0x02, false);
@@ -260,7 +264,7 @@ bool fingerprint_search(uint16_t *page_id, uint16_t *score) {
     if (fp_command(CMD_MATCH, NULL, 0, &confirm, mdata, &mlen, 1000) &&
         confirm == 0x00 && mlen >= 2) {
       uint16_t s = ((uint16_t)mdata[0] << 8) | mdata[1];
-      if (s > 0) {
+      if (s >= MATCH_MIN_SCORE) {
         if (page_id) *page_id = slot;
         if (score) *score = s;
         fingerprint_led(0x02, false);
@@ -335,6 +339,21 @@ bool fingerprint_enroll_stream(uint16_t slot,
   fingerprint_led(0x02, false);
   fingerprint_count();  // refresh cached_count
   return true;
+}
+
+uint8_t fingerprint_index_bitmap(void) {
+  // ReadIndexTable (0x1F) page 0 returns 32 bytes; each bit marks an enrolled
+  // template slot. Return the first byte = slots 0..7 (immurok uses an 8-slot
+  // bitmap in GET_STATUS / FP_LIST).
+  uint8_t page = 0;
+  uint8_t confirm = 0xff;
+  uint8_t table[32];
+  size_t len = sizeof(table);
+  if (fp_command(CMD_READ_INDEX, &page, 1, &confirm, table, &len, 1000) &&
+      confirm == 0x00 && len >= 1) {
+    return table[0];
+  }
+  return 0;
 }
 
 bool fingerprint_delete(uint16_t slot) {
