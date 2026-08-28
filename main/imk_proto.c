@@ -3,6 +3,8 @@
 #include <string.h>
 
 #include "esp_log.h"
+#include "freertos/FreeRTOS.h"
+#include "freertos/task.h"
 
 #include "imk_crypto.h"
 #include "fingerprint.h"
@@ -177,6 +179,9 @@ bool imk_proto_enroll_requested(void) { return s_enroll_requested; }
 void imk_proto_run_enrollment(void) {
   if (!s_enroll_requested) return;
   s_enroll_requested = false;
+  // Let the ENROLL_START [0x10][0x00] reply be delivered before the first
+  // [0x11] progress notification, so the app doesn't read progress as the reply.
+  vTaskDelay(pdMS_TO_TICKS(200));
   ESP_LOGI(TAG, "running enrollment into slot %u", s_enroll_slot);
   bool ok = fingerprint_enroll_stream(s_enroll_slot, enroll_progress);
   ESP_LOGI(TAG, "enroll %s; count=%d bitmap=0x%02x",
