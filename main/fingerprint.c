@@ -264,6 +264,7 @@ bool fingerprint_search(uint16_t *page_id, uint16_t *score) {
     if (fp_command(CMD_MATCH, NULL, 0, &confirm, mdata, &mlen, 1000) &&
         confirm == 0x00 && mlen >= 2) {
       uint16_t s = ((uint16_t)mdata[0] << 8) | mdata[1];
+      ESP_LOGI(TAG, "match slot %u: score=%u", slot, s);
       if (s >= MATCH_MIN_SCORE) {
         if (page_id) *page_id = slot;
         if (score) *score = s;
