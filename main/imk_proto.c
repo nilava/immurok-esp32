@@ -30,14 +30,17 @@ static const char *TAG = "imk_proto";
 static imk_send_fn s_send;
 static bool s_pairing_pending;  // PAIR_INIT received, waiting for a touch
 
-// Response framing: immurok packets are [cmd][len][payload]. Helper to send one.
-static void respond(uint8_t cmd, const uint8_t *payload, size_t plen) {
-  uint8_t pkt[64];
-  if (plen > sizeof(pkt) - 2) plen = sizeof(pkt) - 2;
-  pkt[0] = cmd;
-  pkt[1] = (uint8_t)plen;
-  if (plen) memcpy(pkt + 2, payload, plen);
-  if (s_send) s_send(pkt, plen + 2);
+// Wire format asymmetry (from app-macos/BLEManager.swift): app->device writes
+// are [cmd][len][payload], but device->app responses/notifications are RAW
+// bytes with no length byte — e.g. PAIR_INIT ack is exactly [0x30][0xF0] and
+// the device pubkey message is [0x30][pubkey:33] (34 bytes).
+static void send_raw(const uint8_t *data, size_t len) {
+  if (s_send) s_send(data, len);
+}
+
+static void send2(uint8_t b0, uint8_t b1) {
+  uint8_t pkt[2] = {b0, b1};
+  send_raw(pkt, sizeof(pkt));
 }
 
 void imk_proto_init(imk_send_fn send) {
@@ -62,26 +65,26 @@ void imk_proto_handle(const uint8_t *pkt, size_t len) {
   switch (cmd) {
     case CMD_GET_STATUS: {
       int fp = fingerprint_count();
-      uint8_t body[8] = {
-        ST_OK,
-        (uint8_t)(fp > 0 ? fp : 0),          // fingerprint count/bitmap (simplified)
+      uint8_t bitmap = 0;
+      for (int i = 0; i < fp && i < 8; i++) bitmap |= (uint8_t)(1u << i);
+      uint8_t body[9] = {
+        ST_OK, bitmap,
         (uint8_t)(imk_crypto_is_paired() ? 1 : 0),
-        100,                                  // battery %
-        1, 0, 0, 0,                           // fw major/minor/patch/build (placeholder)
+        100,           // battery %
+        0, 1, 0,       // fw major.minor.patch
+        0, 1,          // build (big-endian)
       };
-      respond(CMD_GET_STATUS, body, sizeof(body));
+      send_raw(body, sizeof(body));
       break;
     }
 
     case CMD_PAIR_INIT: {
       if (imk_crypto_is_paired() && fingerprint_count() > 0) {
         // Already provisioned; require an explicit unpair/reset first.
-        uint8_t b = ST_NEEDS_RESET;
-        respond(CMD_PAIR_INIT, &b, 1);
+        send2(CMD_PAIR_INIT, ST_NEEDS_RESET);
       } else {
         s_pairing_pending = true;
-        uint8_t b = ST_WAIT_BUTTON;  // waiting for the physical-presence gate (a touch)
-        respond(CMD_PAIR_INIT, &b, 1);
+        send2(CMD_PAIR_INIT, ST_WAIT_BUTTON);  // waiting for the presence gate (a touch)
         ESP_LOGI(TAG, "PAIR_INIT: waiting for fingerprint touch to confirm");
         fingerprint_led(0x03, false);  // purple flash: awaiting confirm
       }
@@ -93,13 +96,12 @@ void imk_proto_handle(const uint8_t *pkt, size_t len) {
       uint8_t status = ST_ERROR;
       if (plen >= 33 && imk_pair_complete(payload)) status = ST_OK;
       s_pairing_pending = false;
-      respond(CMD_PAIR_CONFIRM, &status, 1);
+      send2(CMD_PAIR_CONFIRM, status);
       break;
     }
 
     case CMD_PAIR_STATUS: {
-      uint8_t b = imk_crypto_is_paired() ? 1 : 0;
-      respond(CMD_PAIR_STATUS, &b, 1);
+      send2(CMD_PAIR_STATUS, imk_crypto_is_paired() ? 1 : 0);
       break;
     }
 
@@ -107,38 +109,41 @@ void imk_proto_handle(const uint8_t *pkt, size_t len) {
       // [0x38][nonce:8] → [0x38][hmac:8]
       uint8_t hmac[8];
       if (plen >= 8 && imk_hmac8(payload, 8, hmac)) {
-        respond(CMD_CHALLENGE, hmac, sizeof(hmac));
+        uint8_t pkt[9];
+        pkt[0] = CMD_CHALLENGE;
+        memcpy(pkt + 1, hmac, 8);
+        send_raw(pkt, sizeof(pkt));
       } else {
-        uint8_t b = ST_ERROR;
-        respond(CMD_CHALLENGE, &b, 1);
+        send2(CMD_CHALLENGE, ST_ERROR);
       }
       break;
     }
 
-    case CMD_FP_MATCH_ACK:
-      // App acknowledged a match notification; nothing to do for now.
-      break;
-
-    default: {
-      uint8_t b = ST_ERROR;
-      respond(cmd, &b, 1);
+    case CMD_FP_MATCH_ACK: {
+      uint8_t ok = ST_OK;
+      send_raw(&ok, 1);
       break;
     }
+
+    default:
+      send2(cmd, ST_ERROR);
+      break;
   }
 }
 
 void imk_proto_on_fingerprint(uint16_t page_id) {
   if (s_pairing_pending) {
-    // The touch confirms pairing: generate our ephemeral key and send the
-    // compressed public key so the app can complete ECDH.
-    uint8_t pub[33];
-    if (imk_pair_begin(pub)) {
-      // Device→app pubkey notification: [0x30][pubkey:33].
-      respond(CMD_PAIR_INIT, pub, sizeof(pub));
+    // The touch confirms physical presence: notify the app (PAIR_BUTTON, as
+    // immurok's hardware button would), then generate our ephemeral key and
+    // send the raw [0x30][pubkey:33] message the app slices as 1..<34.
+    send2(0x34, 0x01);  // PAIR_BUTTON: confirmed
+    uint8_t pkt[34];
+    pkt[0] = CMD_PAIR_INIT;
+    if (imk_pair_begin(pkt + 1)) {
+      send_raw(pkt, sizeof(pkt));
       ESP_LOGI(TAG, "pairing: sent device public key");
     } else {
-      uint8_t b = ST_ERROR;
-      respond(CMD_PAIR_INIT, &b, 1);
+      send2(CMD_PAIR_INIT, ST_ERROR);
       s_pairing_pending = false;
     }
     return;
