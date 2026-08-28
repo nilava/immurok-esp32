@@ -67,9 +67,7 @@ static bool fp_command(uint8_t instruction, const uint8_t *data, size_t data_len
 
   uint8_t drain[64];
   while (uart_read_bytes(FP_UART, drain, sizeof(drain), 0) > 0) {}
-  int wrote = uart_write_bytes(FP_UART, (const char *)packet, n);
-  static bool logged_write;
-  if (!logged_write) { logged_write = true; ESP_LOGI(TAG, "first write: %d/%u bytes", wrote, (unsigned)n); }
+  uart_write_bytes(FP_UART, (const char *)packet, n);
 
   // Robust receive: bytes may arrive fragmented or with stray leading bytes, so
   // accumulate into a buffer, resync to the 0xEF01 header, and wait for the full
@@ -101,12 +99,6 @@ static bool fp_command(uint8_t instruction, const uint8_t *data, size_t data_len
     }
     return true;
   }
-  // Timed out. Log what (if anything) arrived: 0 bytes => RX wire/UART problem;
-  // some bytes => framing/protocol mismatch.
-  ESP_LOGW(TAG, "cmd 0x%02x: no valid ack, %u raw byte(s): %02x %02x %02x %02x",
-           instruction, (unsigned)pos,
-           pos > 0 ? buf[0] : 0, pos > 1 ? buf[1] : 0,
-           pos > 2 ? buf[2] : 0, pos > 3 ? buf[3] : 0);
   return false;
 }
 
@@ -127,25 +119,9 @@ void fingerprint_init(void) {
     .flow_ctrl = UART_HW_FLOWCTRL_DISABLE,
     .source_clk = UART_SCLK_DEFAULT,
   };
-  esp_err_t e_inst = uart_driver_install(FP_UART, 1024, 0, 0, NULL, 0);
-  esp_err_t e_cfg = uart_param_config(FP_UART, &cfg);
-  esp_err_t e_pin = uart_set_pin(FP_UART, FP_TX_PIN, FP_RX_PIN, UART_PIN_NO_CHANGE, UART_PIN_NO_CHANGE);
-  ESP_LOGI(TAG, "uart install=%s config=%s setpin=%s (tx=%d rx=%d)",
-           esp_err_to_name(e_inst), esp_err_to_name(e_cfg), esp_err_to_name(e_pin),
-           FP_TX_PIN, FP_RX_PIN);
-
-  // Internal loopback self-test: routes TX->RX inside the peripheral, so it
-  // proves whether UART1's receive path works at all, independent of wiring.
-  uart_set_loop_back(FP_UART, true);
-  uart_flush_input(FP_UART);
-  const uint8_t probe[4] = {0xAA, 0x55, 0x12, 0x34};
-  uart_write_bytes(FP_UART, probe, sizeof(probe));
-  uint8_t back[4] = {0};
-  int lb = uart_read_bytes(FP_UART, back, sizeof(back), pdMS_TO_TICKS(200));
-  ESP_LOGI(TAG, "loopback: read %d bytes: %02x %02x %02x %02x", lb,
-           back[0], back[1], back[2], back[3]);
-  uart_set_loop_back(FP_UART, false);
-  uart_flush_input(FP_UART);
+  uart_driver_install(FP_UART, 1024, 0, 0, NULL, 0);
+  uart_param_config(FP_UART, &cfg);
+  uart_set_pin(FP_UART, FP_TX_PIN, FP_RX_PIN, UART_PIN_NO_CHANGE, UART_PIN_NO_CHANGE);
 
   // Give the ZW101 time to finish its own power-on boot before the first command.
   vTaskDelay(pdMS_TO_TICKS(600));
