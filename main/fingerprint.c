@@ -147,12 +147,27 @@ void fingerprint_init(void) {
   uart_set_loop_back(FP_UART, false);
   uart_flush_input(FP_UART);
 
-  // VfyPwd (0x13) with the default all-zero password — some ZW101 units require
-  // this handshake before answering other commands.
+  // Give the ZW101 time to finish its own power-on boot before the first command.
+  vTaskDelay(pdMS_TO_TICKS(600));
+
+  // Try VfyPwd (0x13, default zero password) on the assumed orientation; if it
+  // gets no answer, retry with TX/RX swapped and a couple of attempts, and keep
+  // whichever works. This self-heals a wiring/pin-order surprise.
   uint8_t pw[] = {0x00, 0x00, 0x00, 0x00};
-  uint8_t confirm = 0xff;
-  bool verify = fp_command(0x13, pw, sizeof(pw), &confirm, NULL, NULL, 2000) && confirm == 0x00;
-  ESP_LOGI(TAG, "sensor verify: %s (confirm=0x%02x)", verify ? "ok" : "failed", confirm);
+  bool verify = false;
+  const int pairs[2][2] = {{FP_TX_PIN, FP_RX_PIN}, {FP_RX_PIN, FP_TX_PIN}};
+  for (int p = 0; p < 2 && !verify; p++) {
+    uart_set_pin(FP_UART, pairs[p][0], pairs[p][1], UART_PIN_NO_CHANGE, UART_PIN_NO_CHANGE);
+    for (int attempt = 0; attempt < 3 && !verify; attempt++) {
+      uint8_t confirm = 0xff;
+      verify = fp_command(0x13, pw, sizeof(pw), &confirm, NULL, NULL, 800) && confirm == 0x00;
+      if (verify) {
+        ESP_LOGI(TAG, "sensor verify OK with tx=%d rx=%d", pairs[p][0], pairs[p][1]);
+      }
+      vTaskDelay(pdMS_TO_TICKS(200));
+    }
+  }
+  if (!verify) ESP_LOGW(TAG, "sensor verify failed on both orientations");
 
   int n = fingerprint_count();
   ESP_LOGI(TAG, "sensor init: %d template(s) enrolled", n);
