@@ -68,17 +68,21 @@ void app_main(void) {
       fingerprint_led_idle();
       continue;
     }
+    imk_proto_gate_tick();  // expire a stale fingerprint gate (25s)
     if (fingerprint_present()) {
       if (imk_proto_pairing_pending()) {
         // Any live finger confirms physical presence for pairing.
         imk_proto_on_fingerprint(0);
       } else {
         uint16_t page = 0, score = 0;
-        if (fingerprint_search(&page, &score)) {
-          ESP_LOGI(TAG, "MATCH slot=%u score=%u", page, score);
+        bool matched = fingerprint_search(&page, &score);
+        if (matched) ESP_LOGI(TAG, "MATCH slot=%u score=%u", page, score);
+        else ESP_LOGW(TAG, "no match");
+        if (imk_proto_gate_active()) {
+          // A gate is waiting on this verification — resolve it locally.
+          imk_proto_gate_on_touch(matched, page);
+        } else if (matched) {
           imk_proto_on_fingerprint(page);
-        } else {
-          ESP_LOGW(TAG, "no match");
         }
       }
       while (fingerprint_present()) vTaskDelay(pdMS_TO_TICKS(50));

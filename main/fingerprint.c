@@ -319,13 +319,19 @@ bool fingerprint_enroll_stream(uint16_t slot,
     if (progress) progress(0x00, i - 1, TOTAL);  // waiting for finger
     fingerprint_led_breathe(0x01);  // blue breathing: waiting for a finger
     ESP_LOGI(TAG, "enroll: waiting for finger %u/%u", i, TOTAL);
-    // Wait for a finger to be present, then capture into buffer i.
+    // Wait for a finger to be present, then capture into buffer i. Re-send the
+    // "waiting" frame every ~3s — the app uses it as an enrollment keep-alive.
     TickType_t start = xTaskGetTickCount();
+    TickType_t last_ka = start;
     while (!fingerprint_present()) {
       if ((xTaskGetTickCount() - start) > pdMS_TO_TICKS(15000)) {
         ESP_LOGW(TAG, "enroll: timed out waiting for finger");
         if (progress) progress(0xFF, i - 1, TOTAL);
         return false;
+      }
+      if ((xTaskGetTickCount() - last_ka) > pdMS_TO_TICKS(3000)) {
+        last_ka = xTaskGetTickCount();
+        if (progress) progress(0x00, i - 1, TOTAL);
       }
       vTaskDelay(pdMS_TO_TICKS(50));
     }

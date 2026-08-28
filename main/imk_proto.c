@@ -3,6 +3,7 @@
 #include <string.h>
 
 #include "esp_log.h"
+#include "esp_system.h"
 #include "freertos/FreeRTOS.h"
 #include "freertos/task.h"
 
@@ -13,6 +14,7 @@ static const char *TAG = "imk_proto";
 
 // Opcodes (immurok protocol subset for Phase 5A).
 #define CMD_GET_STATUS    0x01
+#define CMD_GET_BATT_RAW  0x02
 #define CMD_ENROLL_START  0x10
 #define CMD_ENROLL_CANCEL 0x11
 #define CMD_DELETE_FP     0x12
@@ -22,12 +24,16 @@ static const char *TAG = "imk_proto";
 #define CMD_PAIR_CONFIRM  0x31
 #define CMD_PAIR_STATUS   0x32
 #define CMD_AUTH_REQUEST  0x33
+#define CMD_GATE_CANCEL   0x37
 #define CMD_CHALLENGE     0x38
 #define CMD_SLOT_STATUS   0x39
 #define CMD_SLOT_CLEAR    0x3C
 
 // Status/response bytes.
 #define ST_OK          0x00
+#define ST_ERR_TIMEOUT 0x06
+#define ST_FP_NO_MATCH 0x07
+#define ST_GATE_OK     0x10  // gate approved, operation in progress
 #define ST_WAIT_FP     0x11
 #define ST_WAIT_BUTTON 0xF0
 #define ST_NEEDS_RESET 0xF1
@@ -44,9 +50,20 @@ static uint16_t s_enroll_slot;
 // Fingerprint gate: sensitive ops (enroll-with-existing-prints, auth/test) first
 // require verifying an already-enrolled finger. Reply WAIT_FP, wait for a touch
 // that produces a signed [0x21] the app verifies, then FP_MATCH_ACK runs the op.
-typedef enum { GATE_NONE, GATE_AUTH, GATE_ENROLL } gate_t;
+typedef enum { GATE_NONE, GATE_AUTH, GATE_ENROLL, GATE_DELETE } gate_t;
 static gate_t s_gate;
-static uint16_t s_gate_enroll_page;
+static uint16_t s_gate_page;      // enroll target / delete target (sensor page)
+static uint8_t s_gate_attempts;   // wrong-finger count (3 strikes)
+static TickType_t s_gate_start;   // for the 25s device-side gate timeout
+#define GATE_TIMEOUT_MS 25000
+
+static void gate_arm(gate_t g, uint16_t page) {
+  s_gate = g;
+  s_gate_page = page;
+  s_gate_attempts = 0;
+  s_gate_start = xTaskGetTickCount();
+}
+
 
 // Wire format asymmetry (from app-macos/BLEManager.swift): app->device writes
 // are [cmd][len][payload], but device->app responses/notifications are RAW
@@ -60,6 +77,8 @@ static void send2(uint8_t b0, uint8_t b1) {
   uint8_t pkt[2] = {b0, b1};
   send_raw(pkt, sizeof(pkt));
 }
+
+static void send1(uint8_t b0) { send_raw(&b0, 1); }
 
 void imk_proto_init(imk_send_fn send) {
   s_send = send;
@@ -123,9 +142,24 @@ void imk_proto_handle(const uint8_t *pkt, size_t len) {
     }
 
     case CMD_AUTH_REQUEST: {
-      s_gate = GATE_AUTH;
-      send2(CMD_AUTH_REQUEST, ST_WAIT_FP);
+      gate_arm(GATE_AUTH, 0);
+      send1(ST_WAIT_FP);
       ESP_LOGI(TAG, "AUTH_REQUEST: gate (touch to verify)");
+      break;
+    }
+
+    case CMD_GATE_CANCEL: {
+      ESP_LOGI(TAG, "GATE_CANCEL");
+      s_gate = GATE_NONE;
+      s_enroll_requested = false;
+      send1(ST_OK);
+      break;
+    }
+
+    case CMD_GET_BATT_RAW: {
+      // [status][mv:2LE][pct][adc:2LE] — USB-powered, report a full battery.
+      uint8_t body[6] = {ST_OK, (uint8_t)(4200 & 0xff), (uint8_t)(4200 >> 8), 100, 0, 0};
+      send_raw(body, sizeof(body));
       break;
     }
 
@@ -149,15 +183,14 @@ void imk_proto_handle(const uint8_t *pkt, size_t len) {
       uint16_t page = app_slot + 1;  // sensor page (page 0 is unusable)
       if (fingerprint_cached_count() > 0) {
         // Existing prints: require verifying an enrolled finger first.
-        s_gate = GATE_ENROLL;
-        s_gate_enroll_page = page;
-        send2(CMD_ENROLL_START, ST_WAIT_FP);
+        gate_arm(GATE_ENROLL, page);
+        send1(ST_WAIT_FP);  // responses are status-first (no cmd echo)
         ESP_LOGI(TAG, "ENROLL_START app_slot=%u: gate (verify enrolled finger) -> page %u",
                  app_slot, page);
       } else {
         s_enroll_slot = page;
         s_enroll_requested = true;
-        send2(CMD_ENROLL_START, ST_OK);
+        send1(ST_OK);
         ESP_LOGI(TAG, "ENROLL_START app_slot=%u -> sensor page=%u (first enroll)", app_slot, page);
       }
       break;
@@ -165,13 +198,15 @@ void imk_proto_handle(const uint8_t *pkt, size_t len) {
 
     case CMD_ENROLL_CANCEL: {
       s_enroll_requested = false;
-      send2(CMD_ENROLL_CANCEL, ST_OK);
+      send1(ST_OK);
       break;
     }
 
     case CMD_DELETE_FP: {
       uint16_t page = ((plen >= 1) ? payload[0] : 0) + 1;
-      send2(CMD_DELETE_FP, fingerprint_delete(page) ? ST_OK : ST_ERROR);
+      gate_arm(GATE_DELETE, page);
+      send1(ST_WAIT_FP);
+      ESP_LOGI(TAG, "DELETE_FP page %u: gate (verify enrolled finger)", page);
       break;
     }
 
@@ -191,25 +226,27 @@ void imk_proto_handle(const uint8_t *pkt, size_t len) {
     }
 
     case CMD_SLOT_CLEAR: {
-      // Clear a host binding. Slot 0 = the paired key; clearing it unpairs.
-      uint8_t slot = (plen >= 1) ? payload[0] : 0;
-      if (slot == 0) imk_unpair();
-      send2(CMD_SLOT_CLEAR, ST_OK);
+      if (plen == 0) {
+        // Clear the requesting host's own slot: reply [0x3C][OK], then reboot
+        // (the reference device restarts to rotate its BLE address; the app
+        // treats the disconnect itself as success).
+        imk_unpair();
+        send2(CMD_SLOT_CLEAR, ST_OK);
+        ESP_LOGW(TAG, "own slot cleared; restarting");
+        vTaskDelay(pdMS_TO_TICKS(400));
+        esp_restart();
+      } else {
+        // Clearing another host's slot is fingerprint-gated. We only keep one
+        // key today, so a passed gate just unpairs.
+        gate_arm(GATE_DELETE, 0xFFFF);  // sentinel: slot clear, not FP delete
+        send1(ST_WAIT_FP);
+        ESP_LOGI(TAG, "SLOT_CLEAR slot %u: gate", payload[0]);
+      }
       break;
     }
 
     case CMD_FP_MATCH_ACK: {
-      if (s_gate == GATE_ENROLL) {
-        s_gate = GATE_NONE;
-        s_enroll_slot = s_gate_enroll_page;
-        s_enroll_requested = true;  // main loop starts the actual enrollment
-        ESP_LOGI(TAG, "gate passed; starting enrollment into page %u", s_enroll_slot);
-      } else if (s_gate == GATE_AUTH) {
-        s_gate = GATE_NONE;
-        ESP_LOGI(TAG, "gate passed (auth/test)");
-      }
-      uint8_t ok = ST_OK;
-      send_raw(&ok, 1);
+      send1(ST_OK);
       break;
     }
 
@@ -240,6 +277,74 @@ void imk_proto_run_enrollment(void) {
   bool ok = fingerprint_enroll_stream(s_enroll_slot, enroll_progress);
   ESP_LOGI(TAG, "enroll %s; count=%d bitmap=0x%02x",
            ok ? "ok" : "FAIL", fingerprint_count(), fingerprint_index_bitmap());
+}
+
+bool imk_proto_gate_active(void) { return s_gate != GATE_NONE; }
+
+// Called from the main loop: ends an expired gate the way the reference
+// firmware does — SEC_ERR_TIMEOUT (0x06) and back to idle.
+void imk_proto_gate_tick(void) {
+  if (s_gate == GATE_NONE) return;
+  if ((xTaskGetTickCount() - s_gate_start) > pdMS_TO_TICKS(GATE_TIMEOUT_MS)) {
+    ESP_LOGW(TAG, "gate timed out");
+    s_gate = GATE_NONE;
+    send1(ST_ERR_TIMEOUT);
+    fingerprint_led_idle();
+  }
+}
+
+// Called from the main loop with the local match result while a gate is armed.
+// The device resolves the gate itself: [0x10] approve then the operation's
+// result byte; wrong fingers send [0x07] (3 strikes then terminal [0x06]).
+void imk_proto_gate_on_touch(bool matched, uint16_t page_id) {
+  (void)page_id;
+  if (s_gate == GATE_NONE) return;
+  if (!matched) {
+    if (++s_gate_attempts >= 3) {
+      ESP_LOGW(TAG, "gate: 3 wrong fingers, denying");
+      s_gate = GATE_NONE;
+      send1(ST_ERR_TIMEOUT);  // terminal: device ends the gate
+    } else {
+      ESP_LOGW(TAG, "gate: wrong finger (%u/3)", s_gate_attempts);
+      send1(ST_FP_NO_MATCH);  // app counts the attempt, keeps waiting
+    }
+    return;
+  }
+
+  gate_t g = s_gate;
+  s_gate = GATE_NONE;
+  switch (g) {
+    case GATE_AUTH:
+      ESP_LOGI(TAG, "gate passed: AUTH_OK");
+      send1(ST_OK);  // 1-byte AUTH_OK notification
+      break;
+    case GATE_ENROLL:
+      ESP_LOGI(TAG, "gate passed: starting enrollment into page %u", s_gate_page);
+      send1(ST_GATE_OK);                 // fingerprint approved
+      vTaskDelay(pdMS_TO_TICKS(150));
+      send1(ST_OK);                      // gated ENROLL_START result: started
+      s_enroll_slot = s_gate_page;
+      s_enroll_requested = true;         // main loop runs the capture
+      break;
+    case GATE_DELETE: {
+      send1(ST_GATE_OK);
+      bool ok;
+      if (s_gate_page == 0xFFFF) {       // sentinel: SLOT_CLEAR, not FP delete
+        ESP_LOGI(TAG, "gate passed: clearing host slot (unpair)");
+        imk_unpair();
+        ok = true;
+      } else {
+        ESP_LOGI(TAG, "gate passed: deleting page %u", s_gate_page);
+        ok = fingerprint_delete(s_gate_page);
+        fingerprint_count();  // refresh cache
+      }
+      vTaskDelay(pdMS_TO_TICKS(150));
+      send1(ok ? ST_OK : ST_ERROR);      // gated command result
+      break;
+    }
+    default:
+      break;
+  }
 }
 
 void imk_proto_on_fingerprint(uint16_t page_id) {
