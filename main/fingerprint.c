@@ -70,8 +70,11 @@ static bool fp_command_locked(uint8_t instruction, const uint8_t *data, size_t d
   packet[n++] = (checksum >> 8) & 0xff;
   packet[n++] = checksum & 0xff;
 
+  // Flush any leftover/in-flight bytes from a prior command's ack before
+  // sending. A non-blocking drain can miss an ack still arriving (esp. with BLE
+  // loading the CPU), desyncing subsequent reads; wait for the line to go idle.
   uint8_t drain[64];
-  while (uart_read_bytes(FP_UART, drain, sizeof(drain), 0) > 0) {}
+  while (uart_read_bytes(FP_UART, drain, sizeof(drain), pdMS_TO_TICKS(20)) > 0) {}
   uart_write_bytes(FP_UART, (const char *)packet, n);
 
   // Robust receive: bytes may arrive fragmented or with stray leading bytes, so
