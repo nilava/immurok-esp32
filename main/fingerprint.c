@@ -181,10 +181,10 @@ bool fingerprint_present(void) {
 }
 
 void fingerprint_led(uint8_t color, bool steady) {
-  // Aura params: [function][speed/start][color][cycles]. fn 3=steady, 2=flash.
-  // Flash is slowed (speed 128) to a single clean blink rather than a frantic one.
-  uint8_t params[] = {(uint8_t)(steady ? 3 : 2), (uint8_t)(steady ? color : 128),
-                      color, (uint8_t)(steady ? 0 : 1)};
+  // Aura params: [function][start color][end color][cycles] — the 2nd byte is a
+  // COLOR, not a speed (a stray value there lights its bit-pattern color).
+  // fn 3 = steady, 2 = flash.
+  uint8_t params[] = {(uint8_t)(steady ? 3 : 2), color, color, (uint8_t)(steady ? 0 : 2)};
   uint8_t confirm = 0xff;
   fp_command(CMD_AURA_LED, params, sizeof(params), &confirm, NULL, NULL, 1000);
 }
@@ -192,7 +192,7 @@ void fingerprint_led(uint8_t color, bool steady) {
 // Continuous gentle breathing — used for idle (purple) and "waiting to enroll"
 // (blue). fn 1 = breathing, cycles 0 = run until the next aura command.
 void fingerprint_led_breathe(uint8_t color) {
-  uint8_t params[] = {1, 100, color, 0};
+  uint8_t params[] = {1, color, color, 0};
   uint8_t confirm = 0xff;
   fp_command(CMD_AURA_LED, params, sizeof(params), &confirm, NULL, NULL, 1000);
 }
