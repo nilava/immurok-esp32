@@ -31,6 +31,12 @@ static void console_task(void *arg) {
       ESP_LOGW(TAG, "restarting…");
       vTaskDelay(pdMS_TO_TICKS(80));
       esp_restart();
+    } else if (c == 'w' || c == 'W') {
+      ESP_LOGW(TAG, "wiping all fingerprint templates…");
+      bool ok = fingerprint_delete_all();
+      fingerprint_count();  // refresh cache
+      ESP_LOGW(TAG, "wipe %s; %d template(s) now", ok ? "ok" : "FAILED",
+               fingerprint_cached_count());
     }
   }
 }
@@ -50,7 +56,7 @@ void app_main(void) {
   imk_crypto_init();
   imk_proto_init(imk_service_respond);
   imk_service_start();
-  ESP_LOGI(TAG, "immurok-esp32 boot; type 'd' to enter download mode");
+  ESP_LOGI(TAG, "immurok-esp32 boot; console: d=download r=restart w=wipe fingerprints");
   (void)prompt;
 
   // On a fingerprint touch: during pairing it drives the ECDH pubkey exchange;
