@@ -70,7 +70,7 @@ void imk_proto_handle(const uint8_t *pkt, size_t len) {
 
   switch (cmd) {
     case CMD_GET_STATUS: {
-      uint8_t bitmap = fingerprint_index_bitmap();
+      uint8_t bitmap = fingerprint_index_bitmap() >> 1;
       uint8_t body[9] = {
         ST_OK, bitmap,
         (uint8_t)(imk_crypto_is_paired() ? 1 : 0),
@@ -125,10 +125,11 @@ void imk_proto_handle(const uint8_t *pkt, size_t len) {
 
     case CMD_ENROLL_START: {
       // [0x10][slot]. First-time enroll needs no FP gate; start immediately.
-      s_enroll_slot = (plen >= 1) ? payload[0] : 1;
+      uint8_t app_slot = (plen >= 1) ? payload[0] : 0;
+      s_enroll_slot = app_slot + 1;  // sensor page (page 0 is unusable)
       s_enroll_requested = true;
       send2(CMD_ENROLL_START, ST_OK);
-      ESP_LOGI(TAG, "ENROLL_START slot=%u", s_enroll_slot);
+      ESP_LOGI(TAG, "ENROLL_START app_slot=%u -> sensor page=%u", app_slot, s_enroll_slot);
       break;
     }
 
@@ -139,13 +140,13 @@ void imk_proto_handle(const uint8_t *pkt, size_t len) {
     }
 
     case CMD_DELETE_FP: {
-      uint16_t slot = (plen >= 1) ? payload[0] : 0;
-      send2(CMD_DELETE_FP, fingerprint_delete(slot) ? ST_OK : ST_ERROR);
+      uint16_t page = ((plen >= 1) ? payload[0] : 0) + 1;
+      send2(CMD_DELETE_FP, fingerprint_delete(page) ? ST_OK : ST_ERROR);
       break;
     }
 
     case CMD_FP_LIST: {
-      uint8_t body[2] = {ST_OK, fingerprint_index_bitmap()};
+      uint8_t body[2] = {ST_OK, (uint8_t)(fingerprint_index_bitmap() >> 1)};
       send_raw(body, sizeof(body));
       break;
     }
@@ -200,13 +201,14 @@ void imk_proto_on_fingerprint(uint16_t page_id) {
     return;
   }
 
-  // Normal auth: HMAC-signed match notification [0x21][page_id:2LE][hmac:8].
-  uint8_t msg[3] = {NOTIF_FP_MATCH, (uint8_t)(page_id & 0xff), (uint8_t)(page_id >> 8)};
+  // Normal auth: map the matched sensor page back to the app's 0-based slot.
+  uint16_t app_slot = (page_id > 0) ? (page_id - 1) : 0;
+  uint8_t msg[3] = {NOTIF_FP_MATCH, (uint8_t)(app_slot & 0xff), (uint8_t)(app_slot >> 8)};
   uint8_t hmac[8];
   if (!imk_hmac8(msg, sizeof(msg), hmac)) return;  // not paired; nothing to send
   uint8_t notif[11];
   memcpy(notif, msg, 3);
   memcpy(notif + 3, hmac, 8);
   if (s_send) s_send(notif, sizeof(notif));
-  ESP_LOGI(TAG, "sent signed match notification for slot %u", page_id);
+  ESP_LOGI(TAG, "sent signed match notification for app slot %u (page %u)", app_slot, page_id);
 }
