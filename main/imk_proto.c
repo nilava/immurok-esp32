@@ -22,6 +22,8 @@ static const char *TAG = "imk_proto";
 #define CMD_PAIR_CONFIRM  0x31
 #define CMD_PAIR_STATUS   0x32
 #define CMD_CHALLENGE     0x38
+#define CMD_SLOT_STATUS   0x39
+#define CMD_SLOT_CLEAR    0x3C
 
 // Status/response bytes.
 #define ST_OK          0x00
@@ -150,6 +152,23 @@ void imk_proto_handle(const uint8_t *pkt, size_t len) {
     case CMD_FP_LIST: {
       uint8_t body[2] = {ST_OK, (uint8_t)(fingerprint_index_bitmap() >> 1)};
       send_raw(body, sizeof(body));
+      break;
+    }
+
+    case CMD_SLOT_STATUS: {
+      // Dual-host binding status: [0x39][0x00][bound bitmap][active slot].
+      // We currently keep a single shared key = host slot 0 (Host 1).
+      uint8_t bound = imk_crypto_is_paired() ? 0x01 : 0x00;
+      uint8_t body[4] = {CMD_SLOT_STATUS, ST_OK, bound, 0x00};
+      send_raw(body, sizeof(body));
+      break;
+    }
+
+    case CMD_SLOT_CLEAR: {
+      // Clear a host binding. Slot 0 = the paired key; clearing it unpairs.
+      uint8_t slot = (plen >= 1) ? payload[0] : 0;
+      if (slot == 0) imk_unpair();
+      send2(CMD_SLOT_CLEAR, ST_OK);
       break;
     }
 
