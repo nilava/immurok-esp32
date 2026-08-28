@@ -8,6 +8,7 @@
 #include "esp_gatts_api.h"
 #include "esp_gatt_common_api.h"
 #include "esp_log.h"
+#include "esp_timer.h"
 
 #include "imk_proto.h"
 
@@ -122,6 +123,19 @@ static uint16_t s_conn_id;
 static bool s_connected;
 static bool s_notify_enabled;
 static int s_stage;  // which service table is being created
+static uint8_t s_peer_bda[6];
+static esp_timer_handle_t s_conn_param_timer;
+
+// Deferred low-power connection parameters (immurok recipe: 30/50ms, latency
+// 29, 6s supervision), requested ~30s after connect so discovery is long done.
+static void conn_param_timer_cb(void *arg) {
+  (void)arg;
+  if (!s_connected) return;
+  esp_ble_conn_update_params_t cp = {.min_int = 24, .max_int = 40, .latency = 29, .timeout = 600};
+  memcpy(cp.bda, s_peer_bda, sizeof(cp.bda));
+  esp_ble_gap_update_conn_params(&cp);
+  ESP_LOGI(TAG, "requested low-power conn params");
+}
 
 // Advertise flags + name + keyboard appearance + the HID service UUID so macOS
 // lists it as a keyboard. Bluedroid requires service UUIDs in 128-bit form
@@ -215,15 +229,19 @@ static void gatts_handler(esp_gatts_cb_event_t event, esp_gatt_if_t gatts_if,
     case ESP_GATTS_CONNECT_EVT: {
       s_conn_id = param->connect.conn_id;
       s_connected = true;
-      esp_ble_conn_update_params_t cp = {.min_int = 24, .max_int = 40, .latency = 29, .timeout = 600};
-      memcpy(cp.bda, param->connect.remote_bda, sizeof(cp.bda));
-      esp_ble_gap_update_conn_params(&cp);
+      // Do NOT request low-power connection parameters here: asking for slave
+      // latency while macOS is still doing service discovery starves the link
+      // and it drops with supervision timeout (rsn 0x8). Per the immurok spec,
+      // the update is requested ~30 s after connect, once discovery is done.
+      memcpy(s_peer_bda, param->connect.remote_bda, sizeof(s_peer_bda));
+      esp_timer_start_once(s_conn_param_timer, 30 * 1000 * 1000);
       ESP_LOGI(TAG, "host connected");
       break;
     }
     case ESP_GATTS_DISCONNECT_EVT:
       s_connected = false;
       s_notify_enabled = false;
+      esp_timer_stop(s_conn_param_timer);
       imk_proto_on_disconnect();
       ESP_LOGI(TAG, "host disconnected; re-advertising");
       esp_ble_gap_start_advertising(&adv_params);
@@ -265,6 +283,9 @@ void imk_service_start(void) {
   esp_ble_gap_set_security_param(ESP_BLE_SM_MAX_KEY_SIZE, &key_size, sizeof(key_size));
   esp_ble_gap_set_security_param(ESP_BLE_SM_SET_INIT_KEY, &init_key, sizeof(init_key));
   esp_ble_gap_set_security_param(ESP_BLE_SM_SET_RSP_KEY, &rsp_key, sizeof(rsp_key));
+
+  const esp_timer_create_args_t targs = {.callback = conn_param_timer_cb, .name = "connparam"};
+  ESP_ERROR_CHECK(esp_timer_create(&targs, &s_conn_param_timer));
 
   esp_ble_gatt_set_local_mtu(200);
   ESP_ERROR_CHECK(esp_ble_gatts_app_register(0));
