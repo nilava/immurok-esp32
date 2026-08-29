@@ -199,11 +199,11 @@ bool fingerprint_present(void) {
 #define C_PURPLE 7
 
 static void aura(uint8_t mode, uint8_t speed, uint8_t color, uint8_t count) {
-  // ZW101 quirk (differs from the R503): a ZERO in the speed byte of a
-  // steady-on command darkens the ring entirely. Every proven steady call on
-  // this unit carried the color there too, so mirror the color into byte 2
-  // for steady mode; flash/breathe use it as a real speed.
-  if (mode == AURA_ON) speed = color;
+  // ZW101 quirk: speed=0 on a steady-on command darkened the ring. Mirroring
+  // color into the speed byte "fixed" that but scrambled the hue on resweep —
+  // the speed byte does affect color/transition on this unit, so use a fixed
+  // small nonzero speed instead of tying it to the color index.
+  if (mode == AURA_ON && speed == 0) speed = 1;
   uint8_t params[] = {mode, speed, color, count};
   uint8_t confirm = 0xff;
   fp_command(CMD_AURA_LED, params, sizeof(params), &confirm, NULL, NULL, 1000);
@@ -253,13 +253,16 @@ void fingerprint_led_idle(void) {
 
 // Console diagnostic: sweep the seven indexed colors, 2s each, then idle.
 void fingerprint_led_sweep(void) {
-  static const char *NAMES[] = {"?", "1=off?", "2=pink", "3=blue", "4=green",
-                                "5=cyan", "6=red", "7=purple"};
   for (int c = 1; c <= 7; c++) {
-    ESP_LOGW(TAG, "aura color %s", NAMES[c]);
-    aura(AURA_ON, 0, (uint8_t)c, 0);
-    vTaskDelay(pdMS_TO_TICKS(2000));
+    aura(AURA_OFF, 0, 0, 0);           // hard reset between colors —
+    vTaskDelay(pdMS_TO_TICKS(500));    // rules out any transition bleed
+    ESP_LOGW(TAG, "aura color index %d, steady, speed=1 ...", c);
+    aura(AURA_ON, 1, (uint8_t)c, 0);
+    vTaskDelay(pdMS_TO_TICKS(3000));   // longer settle before you judge it
+    ESP_LOGW(TAG, "  (index %d shown above for the last 3s)", c);
   }
+  aura(AURA_OFF, 0, 0, 0);
+  vTaskDelay(pdMS_TO_TICKS(300));
   fingerprint_led_idle();
 }
 
