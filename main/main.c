@@ -108,12 +108,14 @@ void app_main(void) {
         // when a gate is already breathing its own color (cyan "verify to
         // proceed") — forcing purple over that would clash mid-breath.
         if (!imk_proto_gate_active()) fingerprint_led_state(FP_LED_READING);
-        // The first frame of a touch is often poor (cold sensor, light touch);
-        // retry while the finger is still down before calling it a miss.
-        for (int attempt = 0; attempt < 3 && !matched; attempt++) {
-          matched = fingerprint_search(&page, &score);
-          if (!matched && !fingerprint_present()) break;
-        }
+        // Single capture per touch — matches tinytouch's proven, complaint-
+        // free behavior on this exact sensor. A 3x cold-start retry looked
+        // good on paper but each capture attempt visibly blips the ring
+        // (likely a hardware indicator baked into the sensor's own imaging
+        // sequence, independent of our aura commands), so 3 attempts read
+        // as an ugly triple-flicker on every ordinary wrong-finger touch.
+        // Trade: rare cold-boot misses need a second tap, same as always.
+        matched = fingerprint_search(&page, &score);
         if (matched) {
           ESP_LOGI(TAG, "MATCH slot=%u score=%u", page, score);
         } else {

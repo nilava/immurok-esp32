@@ -628,6 +628,14 @@ static void handle_switch_finger(void) {
     fingerprint_led_state(FP_LED_NOMATCH);
     return;
   }
+  // The sensor briefly shows its own green "good capture" indicator right
+  // after a successful match, independent of our aura commands — visible
+  // here because the next intended color (blue) doesn't mask it the way
+  // green normally would on an ordinary match. Rather than fight a signal
+  // we can't suppress, hold on it deliberately for a beat so it reads as
+  // "confirmed" before easing into "now switching".
+  fingerprint_led_state(FP_LED_MATCH);
+  vTaskDelay(pdMS_TO_TICKS(250));
   fingerprint_led_state(FP_LED_SWITCHING);  // steady blue
   imk_service_switch_host(addr, atype);
 }

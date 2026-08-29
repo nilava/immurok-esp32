@@ -228,8 +228,13 @@ static void aura(uint8_t function, uint8_t p1, uint8_t p2, uint8_t count) {
 
 static void aura_steady(uint8_t color) { aura(AURA_ON, color, color, 0); }
 static void aura_off(void) { aura(AURA_OFF, 0, 0, 0); }
-// speed ~0 fast .. 255 slow; 100 reads as a calm multi-second fade.
-static void aura_breathe(uint8_t color) { aura(AURA_BREATHE, 100, color, 0); }
+// Byte[1] is the real color selector on this unit for EVERY function, not
+// just steady — a "speed" value there (previously 100) got read as a color
+// mask (100 & 0x07 = 4 = red), which is why breathing showed the wrong hue
+// regardless of what was asked for. There is no working speed control;
+// mirror color into both fields like steady and let the module's own fixed
+// breathing rate run.
+static void aura_breathe(uint8_t color) { aura(AURA_BREATHE, color, color, 0); }
 
 // Whether a host is connected steers what "idle" looks like (purple = ready,
 // yellow = can't reach a computer). Set from the BLE layer.
