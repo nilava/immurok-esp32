@@ -10,6 +10,7 @@
 #include "imk_crypto.h"
 #include "fingerprint.h"
 #include "imk_keystore.h"
+#include "imk_service.h"
 
 static const char *TAG = "imk_proto";
 
@@ -49,6 +50,11 @@ static const char *TAG = "imk_proto";
 #define ST_WAIT_BUTTON 0xF0
 #define ST_NEEDS_RESET 0xF1
 #define ST_ERROR       0xFF
+
+// The app's 6th fingerprint slot (index 5) is the dual-host SWITCH finger:
+// it never authenticates — matching it moves the device to the other host.
+// App slot 5 -> sensor page 6.
+#define FP_SWITCH_PAGE 6
 
 // Notification tags.
 #define NOTIF_FP_MATCH 0x21
@@ -518,8 +524,9 @@ void imk_proto_gate_tick(void) {
 // The device resolves the gate itself: [0x10] approve then the operation's
 // result byte; wrong fingers send [0x07] (3 strikes then terminal [0x06]).
 void imk_proto_gate_on_touch(bool matched, uint16_t page_id) {
-  (void)page_id;
   if (s_gate == GATE_NONE) return;
+  // The switch finger is not an auth finger: it never passes a gate.
+  if (matched && page_id == FP_SWITCH_PAGE) matched = false;
   if (!matched) {
     if (++s_gate_attempts >= 3) {
       ESP_LOGW(TAG, "gate: 3 wrong fingers, denying");
@@ -610,9 +617,27 @@ void imk_proto_on_pairing_touch(bool matched) {
   }
 }
 
+// Switch-finger match: hand the device to the other bound host.
+static void handle_switch_finger(void) {
+  int active = imk_crypto_active_slot();
+  int target = (active == 0) ? 1 : 0;
+  uint8_t addr[6], atype = 0;
+  if (!imk_crypto_slot_addr(target, addr, &atype)) {
+    ESP_LOGW(TAG, "switch finger: no other host bound");
+    fingerprint_led(0x04, true);
+    return;
+  }
+  fingerprint_led(0x01, true);  // steady blue: switching
+  imk_service_switch_host(addr, atype);
+}
+
 void imk_proto_on_fingerprint(uint16_t page_id) {
   if (s_pairing_pending) {
     imk_proto_on_pairing_touch(true);
+    return;
+  }
+  if (page_id == FP_SWITCH_PAGE) {
+    handle_switch_finger();
     return;
   }
 

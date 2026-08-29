@@ -30,6 +30,9 @@ bool imk_crypto_any_paired(void);
 uint8_t imk_crypto_slot_bitmap(void);      // bit0 = slot 1, bit1 = slot 2
 int imk_crypto_free_slot(void);            // 0/1, or -1 when both bound
 uint8_t imk_crypto_active_slot_1b(void);   // 1-based slot of the live host
+int imk_crypto_active_slot(void);          // 0/1, -1 when host unbound
+bool imk_crypto_slot_addr(int slot, uint8_t addr[6], uint8_t *atype);
+void imk_crypto_set_peer_addr_type(uint8_t atype);  // from auth-complete
 
 // HMAC-SHA256(shared_key, msg)[0:8]. Returns false if not paired.
 bool imk_hmac8(const uint8_t *msg, size_t len, uint8_t out[8]);

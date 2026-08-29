@@ -1,5 +1,6 @@
 #include "imk_crypto.h"
 
+#include <stdio.h>
 #include <string.h>
 
 #include "esp_log.h"
@@ -21,6 +22,7 @@ static const char HKDF_INFO[] = "immurok-shared-key";
 static uint8_t shared_key[2][32];
 static bool paired_slot[2];
 static uint8_t host_addr[2][6];
+static uint8_t host_atype[2];      // BLE address type, needed for whitelist
 static int active_slot = -1;        // -1: connected host not bound yet
 static uint8_t current_bda[6];      // peer address of the live connection
 
@@ -48,6 +50,10 @@ static void load_keys(void) {
       paired_slot[s] = true;
       len = 6;
       nvs_get_blob(h, ADDR_NAMES[s], host_addr[s], &len);
+      uint8_t at = 0;
+      char akey[8];
+      snprintf(akey, sizeof(akey), "atype%d", s);
+      if (nvs_get_u8(h, akey, &at) == ESP_OK) host_atype[s] = at;
     }
   }
   // Legacy single-key layout ("shared_key") migrates into slot 0; its host
@@ -67,6 +73,9 @@ static bool store_slot(int s) {
   if (nvs_open("imk", NVS_READWRITE, &h) != ESP_OK) return false;
   esp_err_t r = nvs_set_blob(h, KEY_NAMES[s], shared_key[s], 32);
   if (r == ESP_OK) r = nvs_set_blob(h, ADDR_NAMES[s], host_addr[s], 6);
+  char akey[8];
+  snprintf(akey, sizeof(akey), "atype%d", s);
+  if (r == ESP_OK) r = nvs_set_u8(h, akey, host_atype[s]);
   if (r == ESP_OK) r = nvs_commit(h);
   nvs_close(h);
   return r == ESP_OK;
@@ -87,6 +96,20 @@ static bool addr_zero(const uint8_t a[6]) {
 // `authenticated` means bda is the bonded IDENTITY address (auth-complete);
 // only then may a legacy zero-address slot adopt the host — the address at
 // connect time can be an unresolved RPA and must never be persisted.
+static uint8_t s_current_atype;
+
+void imk_crypto_set_peer_addr_type(uint8_t atype) { s_current_atype = atype; }
+
+int imk_crypto_active_slot(void) { return active_slot; }
+
+// Fetch a slot's bonded host address for directed reconnection.
+bool imk_crypto_slot_addr(int slot, uint8_t addr[6], uint8_t *atype) {
+  if (slot < 0 || slot > 1 || !paired_slot[slot] || addr_zero(host_addr[slot])) return false;
+  memcpy(addr, host_addr[slot], 6);
+  if (atype) *atype = host_atype[slot];
+  return true;
+}
+
 void imk_crypto_select_host2(const uint8_t bda[6], bool authenticated) {
   memcpy(current_bda, bda, 6);
   active_slot = -1;
@@ -97,6 +120,7 @@ void imk_crypto_select_host2(const uint8_t bda[6], bool authenticated) {
     for (int s = 0; s < 2; s++) {
       if (paired_slot[s] && addr_zero(host_addr[s])) {
         memcpy(host_addr[s], bda, 6);
+        host_atype[s] = s_current_atype;
         store_slot(s);
         active_slot = s;
         ESP_LOGI(TAG, "slot %d adopted host %02x:%02x:%02x:%02x:%02x:%02x",
@@ -224,6 +248,7 @@ bool imk_pair_complete(const uint8_t app_pubkey[33]) {
                      (const uint8_t *)HKDF_INFO, strlen(HKDF_INFO),
                      shared_key[slot], 32) != 0) break;
     memcpy(host_addr[slot], current_bda, 6);
+    host_atype[slot] = s_current_atype;
     paired_slot[slot] = true;
     ok = store_slot(slot);
     if (ok) {

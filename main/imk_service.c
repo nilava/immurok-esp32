@@ -153,11 +153,54 @@ static esp_ble_adv_data_t adv_data = {
   .p_service_uuid = (uint8_t *)hid_adv_uuid128,
   .flag = (ESP_BLE_ADV_FLAG_GEN_DISC | ESP_BLE_ADV_FLAG_BREDR_NOT_SPT),
 };
+// Host switch: after the switch finger matches, disconnect and advertise
+// whitelist-only toward the target host for a window, so the previous host
+// can't instantly re-grab the connection. Falls back to open advertising.
+static bool s_switch_pending;
+static esp_bd_addr_t s_switch_addr;
+static esp_ble_addr_type_t s_switch_atype;
+static esp_timer_handle_t s_switch_timer;
+
 static esp_ble_adv_params_t adv_params = {
   .adv_int_min = 0x20, .adv_int_max = 0x40, .adv_type = ADV_TYPE_IND,
   .own_addr_type = BLE_ADDR_TYPE_PUBLIC, .channel_map = ADV_CHNL_ALL,
   .adv_filter_policy = ADV_FILTER_ALLOW_SCAN_ANY_CON_ANY,
 };
+
+static void switch_window_end(void *arg) {
+  (void)arg;
+  if (!s_switch_pending) return;
+  s_switch_pending = false;
+  esp_ble_gap_update_whitelist(false, s_switch_addr, s_switch_atype);
+  adv_params.adv_filter_policy = ADV_FILTER_ALLOW_SCAN_ANY_CON_ANY;
+  if (!s_connected) {
+    // Re-open advertising to everyone (target host didn't show up).
+    esp_ble_gap_stop_advertising();
+    esp_ble_gap_start_advertising(&adv_params);
+  }
+  ESP_LOGW(TAG, "host switch window expired; open advertising");
+}
+
+void imk_service_switch_host(const uint8_t addr[6], uint8_t atype) {
+  memcpy(s_switch_addr, addr, sizeof(esp_bd_addr_t));
+  s_switch_atype = (esp_ble_addr_type_t)atype;
+  s_switch_pending = true;
+  if (!s_switch_timer) {
+    const esp_timer_create_args_t args = {.callback = switch_window_end, .name = "imk_switch"};
+    esp_timer_create(&args, &s_switch_timer);
+  }
+  esp_timer_stop(s_switch_timer);
+  esp_timer_start_once(s_switch_timer, 30 * 1000 * 1000);
+  esp_ble_gap_update_whitelist(true, s_switch_addr, s_switch_atype);
+  ESP_LOGI(TAG, "switching host: directed advertising for 30s");
+  if (s_connected) {
+    esp_ble_gatts_close(s_gatts_if, s_conn_id);  // disconnect path re-advertises
+  } else {
+    esp_ble_gap_stop_advertising();
+    adv_params.adv_filter_policy = ADV_FILTER_ALLOW_SCAN_ANY_CON_WLST;
+    esp_ble_gap_start_advertising(&adv_params);
+  }
+}
 
 void imk_service_respond(const uint8_t *data, size_t len) {
   if (!s_connected || !s_notify_enabled || s_gatts_if == ESP_GATT_IF_NONE) return;
@@ -192,7 +235,15 @@ static void gap_handler(esp_gap_ble_cb_event_t event, esp_ble_gap_cb_param_t *pa
         // Re-select with the identity address (the connect event may have
         // carried a resolvable private address for a bonded host). Legacy
         // zero-address slots may only adopt a host HERE.
+        imk_crypto_set_peer_addr_type(param->ble_security.auth_cmpl.addr_type);
         imk_crypto_select_host2(param->ble_security.auth_cmpl.bd_addr, true);
+        if (s_switch_pending) {
+          s_switch_pending = false;
+          esp_timer_stop(s_switch_timer);
+          esp_ble_gap_update_whitelist(false, s_switch_addr, s_switch_atype);
+          adv_params.adv_filter_policy = ADV_FILTER_ALLOW_SCAN_ANY_CON_ANY;
+          ESP_LOGI(TAG, "host switch complete");
+        }
       }
       break;
     case ESP_GAP_BLE_SEC_REQ_EVT:
@@ -251,7 +302,11 @@ static void gatts_handler(esp_gatts_cb_event_t event, esp_gatt_if_t gatts_if,
       s_notify_enabled = false;
       esp_timer_stop(s_conn_param_timer);
       imk_proto_on_disconnect();
-      ESP_LOGI(TAG, "host disconnected; re-advertising");
+      adv_params.adv_filter_policy = s_switch_pending
+          ? ADV_FILTER_ALLOW_SCAN_ANY_CON_WLST
+          : ADV_FILTER_ALLOW_SCAN_ANY_CON_ANY;
+      ESP_LOGI(TAG, "host disconnected; re-advertising%s",
+               s_switch_pending ? " (whitelist: switch target)" : "");
       esp_ble_gap_start_advertising(&adv_params);
       break;
     case ESP_GATTS_WRITE_EVT:

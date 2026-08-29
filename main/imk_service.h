@@ -14,4 +14,8 @@ void imk_service_start(void);
 // connected or notifications aren't enabled.
 void imk_service_respond(const uint8_t *data, size_t len);
 
+// Disconnect and advertise whitelist-only toward `addr` for 30s, so the
+// other bound host picks the device up (the switch-finger feature).
+void imk_service_switch_host(const uint8_t addr[6], uint8_t atype);
+
 bool imk_service_connected(void);
