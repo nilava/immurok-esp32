@@ -219,6 +219,41 @@ static void aura(uint8_t function, uint8_t start_color, uint8_t end_color, uint8
   fp_command(CMD_AURA_LED, params, sizeof(params), &confirm, NULL, NULL, 1000);
 }
 
+// Software breathing: the module's own breathe function proved unreliable on
+// this unit (mirrors the earlier flash-mode failure), so drive a slow pulse
+// ourselves — on for a beat, a shorter dark gap, repeat — guaranteed correct
+// regardless of module firmware quirks. Runs in a dedicated low-priority task
+// so it can be interrupted the instant a real state change happens.
+static TaskHandle_t s_breathe_task;
+static volatile bool s_breathe_active;
+static volatile uint8_t s_breathe_color;
+
+static void breathe_task(void *arg) {
+  (void)arg;
+  bool lit = false;
+  while (1) {
+    if (!s_breathe_active) { lit = false; vTaskDelay(pdMS_TO_TICKS(150)); continue; }
+    if (lit) {
+      aura(AURA_OFF, 0, 0, 0);
+      vTaskDelay(pdMS_TO_TICKS(450));
+    } else {
+      aura(AURA_ON, s_breathe_color, s_breathe_color, 0);
+      vTaskDelay(pdMS_TO_TICKS(950));
+    }
+    lit = !lit;
+  }
+}
+
+static void breathe_start(uint8_t color) {
+  s_breathe_color = color;
+  s_breathe_active = true;
+  if (!s_breathe_task) {
+    xTaskCreate(breathe_task, "led_breathe", 2560, NULL, 3, &s_breathe_task);
+  }
+}
+
+static void breathe_stop(void) { s_breathe_active = false; }
+
 // Whether a host is connected steers what "idle" looks like (purple = ready,
 // yellow = can't reach a computer). Set from the BLE layer.
 static bool s_host_connected;
@@ -229,22 +264,22 @@ void fingerprint_led_set_connected(bool connected) {
 
 void fingerprint_led_state(fp_led_state_t s) {
   switch (s) {
-    case FP_LED_IDLE:         aura(AURA_ON, C_PURPLE, C_PURPLE, 0); break;
-    case FP_LED_UNREACHABLE:  aura(AURA_BREATHE, C_OFF, C_RED, 0); break;
-    case FP_LED_READING:      aura(AURA_BREATHE, C_OFF, C_WHITE, 0); break;
+    case FP_LED_IDLE:         breathe_stop(); aura(AURA_ON, C_PURPLE, C_PURPLE, 0); break;
+    case FP_LED_UNREACHABLE:  breathe_start(C_RED); break;
+    case FP_LED_READING:      breathe_start(C_WHITE); break;
     // No flash function: earlier attempts showed this ring's flash sequence
     // swallows commands sent while it runs and then holds its color,
     // orphaning the idle repaint. Verdicts are steady holds instead; the
     // callers time the return to idle.
-    case FP_LED_MATCH:        aura(AURA_ON, C_GREEN, C_GREEN, 0); break;
-    case FP_LED_NOMATCH:      aura(AURA_ON, C_RED, C_RED, 0); break;
-    case FP_LED_ENROLL_PLACE: aura(AURA_BREATHE, C_OFF, C_BLUE, 0); break;
-    case FP_LED_ENROLL_LIFT:  aura(AURA_ON, C_CYAN, C_CYAN, 0); break;
-    case FP_LED_ENROLL_OK:    aura(AURA_ON, C_GREEN, C_GREEN, 0); break;
-    case FP_LED_ENROLL_FAIL:  aura(AURA_ON, C_RED, C_RED, 0); break;
-    case FP_LED_PAIRING:      aura(AURA_BREATHE, C_OFF, C_PURPLE, 0); break;
-    case FP_LED_SWITCHING:    aura(AURA_ON, C_BLUE, C_BLUE, 0); break;
-    case FP_LED_AUTH_WAIT:    aura(AURA_BREATHE, C_OFF, C_CYAN, 0); break;
+    case FP_LED_MATCH:        breathe_stop(); aura(AURA_ON, C_GREEN, C_GREEN, 0); break;
+    case FP_LED_NOMATCH:      breathe_stop(); aura(AURA_ON, C_RED, C_RED, 0); break;
+    case FP_LED_ENROLL_PLACE: breathe_start(C_BLUE); break;
+    case FP_LED_ENROLL_LIFT:  breathe_stop(); aura(AURA_ON, C_CYAN, C_CYAN, 0); break;
+    case FP_LED_ENROLL_OK:    breathe_stop(); aura(AURA_ON, C_GREEN, C_GREEN, 0); break;
+    case FP_LED_ENROLL_FAIL:  breathe_stop(); aura(AURA_ON, C_RED, C_RED, 0); break;
+    case FP_LED_PAIRING:      breathe_start(C_PURPLE); break;
+    case FP_LED_SWITCHING:    breathe_stop(); aura(AURA_ON, C_BLUE, C_BLUE, 0); break;
+    case FP_LED_AUTH_WAIT:    breathe_start(C_CYAN); break;
   }
 }
 
@@ -319,8 +354,11 @@ static bool capture_to_buffer(uint8_t buffer, uint32_t wait_ms) {
   return false;
 }
 
+// Does not paint any verdict color — only the caller knows whether a match
+// means "unlock", "this is the switch finger", "gate passed", etc, and
+// painting green/red here caused a visible flash of the wrong color before
+// the caller's own paint (e.g. green then blue on the switch finger).
 bool fingerprint_search(uint16_t *page_id, uint16_t *score) {
-  fingerprint_led_state(FP_LED_READING);  // steady white while capturing
   if (!capture_to_buffer(1, 800)) {
     ESP_LOGW(TAG, "search: capture failed");
     return false;
@@ -343,7 +381,6 @@ bool fingerprint_search(uint16_t *page_id, uint16_t *score) {
     if (s >= MATCH_MIN_SCORE) {
       if (page_id) *page_id = ((uint16_t)data[0] << 8) | data[1];
       if (score) *score = s;
-      fingerprint_led_state(FP_LED_MATCH);
       return true;
     }
   }
@@ -367,7 +404,6 @@ bool fingerprint_search(uint16_t *page_id, uint16_t *score) {
     if (mok && confirm == 0x00 && s >= MATCH_MIN_SCORE) {
       if (page_id) *page_id = slot;
       if (score) *score = s;
-      fingerprint_led(0x02, true);  // steady green: matched
       return true;
     }
   }

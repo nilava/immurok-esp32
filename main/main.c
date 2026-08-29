@@ -92,6 +92,7 @@ void app_main(void) {
         if (imk_proto_pairing_needs_match()) {
           // Second-host pairing: this touch must MATCH an enrolled finger.
           uint16_t page = 0, score = 0;
+          fingerprint_led_state(FP_LED_READING);
           bool m = fingerprint_search(&page, &score);
           if (!m) fingerprint_led_state(FP_LED_NOMATCH);
           imk_proto_on_pairing_touch(m);
@@ -102,6 +103,9 @@ void app_main(void) {
       } else {
         uint16_t page = 0, score = 0;
         bool matched = false;
+        // Paint once for the whole touch, not per retry — search() itself no
+        // longer paints, so this doesn't flicker between attempts.
+        fingerprint_led_state(FP_LED_READING);
         // The first frame of a touch is often poor (cold sensor, light touch);
         // retry while the finger is still down before calling it a miss.
         for (int attempt = 0; attempt < 3 && !matched; attempt++) {
