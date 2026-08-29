@@ -55,7 +55,18 @@ static const char *TAG = "imk_proto";
 #define NOTIF_LOCK_REQ 0x23  // long-press: ask the host to lock its screen
 
 static imk_send_fn s_send;
-static bool s_pairing_pending;  // PAIR_INIT received, waiting for a touch
+
+// Pairing progresses through touch-driven stages. First-time pairing needs a
+// presence touch only; binding a SECOND host requires an enrolled-finger
+// match first (PAIR_BUTTON 0x03), then a confirm touch (the "button").
+typedef enum {
+  PAIR_IDLE,
+  PAIR_WAIT_PRESENCE,   // first-time: any touch confirms
+  PAIR_WAIT_MATCH,      // second host: enrolled finger required
+  PAIR_WAIT_CONFIRM,    // second host: fp passed, one more touch to confirm
+} pair_stage_t;
+static pair_stage_t s_pair_stage;
+static bool s_pairing_pending;  // any stage active (main loop routes touches)
 static volatile bool s_enroll_requested;
 static uint16_t s_enroll_slot;
 
@@ -160,6 +171,7 @@ bool imk_proto_pairing_pending(void) { return s_pairing_pending; }
 
 void imk_proto_on_disconnect(void) {
   s_pairing_pending = false;
+  s_pair_stage = PAIR_IDLE;
   s_gate = GATE_NONE;
   imk_pair_abort();
 }
@@ -188,9 +200,19 @@ void imk_proto_handle(const uint8_t *pkt, size_t len) {
 
     case CMD_PAIR_INIT: {
       if (imk_crypto_is_paired() && fingerprint_count() > 0) {
-        // Already provisioned; require an explicit unpair/reset first.
+        // THIS host is already bound; re-pairing it needs an explicit reset.
         send2(CMD_PAIR_INIT, ST_NEEDS_RESET);
+      } else if (imk_crypto_free_slot() < 0) {
+        send2(CMD_PAIR_INIT, ST_NEEDS_RESET);  // both slots taken
+      } else if (imk_crypto_any_paired() && (fingerprint_index_bitmap() >> 1) != 0) {
+        // Second host: prove you're the owner (enrolled finger), then confirm.
+        s_pair_stage = PAIR_WAIT_MATCH;
+        s_pairing_pending = true;
+        send2(CMD_PAIR_INIT, ST_WAIT_BUTTON);
+        ESP_LOGI(TAG, "PAIR_INIT: second host — verify enrolled finger first");
+        fingerprint_led(0x03, false);
       } else {
+        s_pair_stage = PAIR_WAIT_PRESENCE;
         s_pairing_pending = true;
         send2(CMD_PAIR_INIT, ST_WAIT_BUTTON);  // waiting for the presence gate (a touch)
         ESP_LOGI(TAG, "PAIR_INIT: waiting for fingerprint touch to confirm");
@@ -204,6 +226,7 @@ void imk_proto_handle(const uint8_t *pkt, size_t len) {
       uint8_t status = ST_ERROR;
       if (plen >= 33 && imk_pair_complete(payload)) status = ST_OK;
       s_pairing_pending = false;
+      s_pair_stage = PAIR_IDLE;
       send2(CMD_PAIR_CONFIRM, status);
       break;
     }
@@ -292,10 +315,11 @@ void imk_proto_handle(const uint8_t *pkt, size_t len) {
     }
 
     case CMD_SLOT_STATUS: {
-      // Dual-host binding status: [0x39][0x00][bound bitmap][active slot].
-      // We currently keep a single shared key = host slot 0 (Host 1).
-      uint8_t bound = imk_crypto_is_paired() ? 0x01 : 0x00;
-      uint8_t body[4] = {CMD_SLOT_STATUS, ST_OK, bound, 0x00};
+      // [0x39][0x00][bound bitmap][active slot] — bitmap bit0 = slot 1;
+      // active is the 1-based slot of the connected host (its future slot
+      // when it isn't bound yet, so the app can tell it's the second host).
+      uint8_t body[4] = {CMD_SLOT_STATUS, ST_OK,
+                         imk_crypto_slot_bitmap(), imk_crypto_active_slot_1b()};
       send_raw(body, sizeof(body));
       break;
     }
@@ -311,11 +335,13 @@ void imk_proto_handle(const uint8_t *pkt, size_t len) {
         vTaskDelay(pdMS_TO_TICKS(400));
         esp_restart();
       } else {
-        // Clearing another host's slot is fingerprint-gated. We only keep one
-        // key today, so a passed gate just unpairs.
-        gate_arm(GATE_DELETE, 0xFFFF);  // sentinel: slot clear, not FP delete
+        // Clearing another host's slot (1-based) is fingerprint-gated; the
+        // live connection's own slot stays, so no reboot.
+        uint8_t target = payload[0];
+        if (target < 1 || target > 2) { send1(ST_ERROR); break; }
+        gate_arm(GATE_DELETE, 0xFFF0 | (target - 1));  // sentinel + slot
         send1(ST_WAIT_FP);
-        ESP_LOGI(TAG, "SLOT_CLEAR slot %u: gate", payload[0]);
+        ESP_LOGI(TAG, "SLOT_CLEAR slot %u: gate", target);
       }
       break;
     }
@@ -530,9 +556,10 @@ void imk_proto_gate_on_touch(bool matched, uint16_t page_id) {
     case GATE_DELETE: {
       send1(ST_GATE_OK);
       bool ok;
-      if (s_gate_page == 0xFFFF) {       // sentinel: SLOT_CLEAR, not FP delete
-        ESP_LOGI(TAG, "gate passed: clearing host slot (unpair)");
-        imk_unpair();
+      if ((s_gate_page & 0xFFF0) == 0xFFF0) {  // sentinel: SLOT_CLEAR
+        int slot = s_gate_page & 0x0F;
+        ESP_LOGI(TAG, "gate passed: clearing host slot %d", slot);
+        imk_unpair_slot(slot);
         ok = true;
       } else {
         ESP_LOGI(TAG, "gate passed: deleting page %u", s_gate_page);
@@ -548,21 +575,44 @@ void imk_proto_gate_on_touch(bool matched, uint16_t page_id) {
   }
 }
 
+// True when the pairing stage requires a real enrolled-finger match (second
+// host), not just presence.
+bool imk_proto_pairing_needs_match(void) { return s_pair_stage == PAIR_WAIT_MATCH; }
+
+// Advance the pairing state machine on a touch. `matched` reflects a real
+// search result when a match was required; presence stages pass true.
+void imk_proto_on_pairing_touch(bool matched) {
+  switch (s_pair_stage) {
+    case PAIR_WAIT_MATCH:
+      if (!matched) return;  // wrong finger: stay in the stage, LED showed red
+      s_pair_stage = PAIR_WAIT_CONFIRM;
+      send2(0x34, 0x03);  // PAIR_BUTTON 0x03: fingerprint passed, confirm next
+      ESP_LOGI(TAG, "pairing: enrolled finger verified; touch again to confirm");
+      fingerprint_led(0x03, false);
+      return;
+    case PAIR_WAIT_PRESENCE:
+    case PAIR_WAIT_CONFIRM: {
+      send2(0x34, 0x01);  // PAIR_BUTTON: confirmed — ECDH starts
+      uint8_t pkt[34];
+      pkt[0] = CMD_PAIR_INIT;
+      if (imk_pair_begin(pkt + 1)) {
+        send_raw(pkt, sizeof(pkt));
+        ESP_LOGI(TAG, "pairing: sent device public key");
+      } else {
+        send2(CMD_PAIR_INIT, ST_ERROR);
+        s_pairing_pending = false;
+      }
+      s_pair_stage = PAIR_IDLE;
+      return;
+    }
+    default:
+      return;
+  }
+}
+
 void imk_proto_on_fingerprint(uint16_t page_id) {
   if (s_pairing_pending) {
-    // The touch confirms physical presence: notify the app (PAIR_BUTTON, as
-    // immurok's hardware button would), then generate our ephemeral key and
-    // send the raw [0x30][pubkey:33] message the app slices as 1..<34.
-    send2(0x34, 0x01);  // PAIR_BUTTON: confirmed
-    uint8_t pkt[34];
-    pkt[0] = CMD_PAIR_INIT;
-    if (imk_pair_begin(pkt + 1)) {
-      send_raw(pkt, sizeof(pkt));
-      ESP_LOGI(TAG, "pairing: sent device public key");
-    } else {
-      send2(CMD_PAIR_INIT, ST_ERROR);
-      s_pairing_pending = false;
-    }
+    imk_proto_on_pairing_touch(true);
     return;
   }
 

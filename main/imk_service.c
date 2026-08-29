@@ -11,6 +11,7 @@
 #include "esp_timer.h"
 
 #include "imk_proto.h"
+#include "imk_crypto.h"
 
 static const char *TAG = "imk_service";
 
@@ -187,6 +188,11 @@ static void gap_handler(esp_gap_ble_cb_event_t event, esp_ble_gap_cb_param_t *pa
     case ESP_GAP_BLE_AUTH_CMPL_EVT:
       ESP_LOGI(TAG, "auth complete: %s",
                param->ble_security.auth_cmpl.success ? "success" : "FAIL");
+      if (param->ble_security.auth_cmpl.success) {
+        // Re-select with the identity address (the connect event may have
+        // carried a resolvable private address for a bonded host).
+        imk_crypto_select_host(param->ble_security.auth_cmpl.bd_addr);
+      }
       break;
     case ESP_GAP_BLE_SEC_REQ_EVT:
       esp_ble_gap_security_rsp(param->ble_security.ble_req.bd_addr, true);
@@ -234,6 +240,7 @@ static void gatts_handler(esp_gatts_cb_event_t event, esp_gatt_if_t gatts_if,
       // and it drops with supervision timeout (rsn 0x8). Per the immurok spec,
       // the update is requested ~30 s after connect, once discovery is done.
       memcpy(s_peer_bda, param->connect.remote_bda, sizeof(s_peer_bda));
+      imk_crypto_select_host(s_peer_bda);
       esp_timer_start_once(s_conn_param_timer, 30 * 1000 * 1000);
       ESP_LOGI(TAG, "host connected");
       break;

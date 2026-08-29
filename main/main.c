@@ -79,8 +79,16 @@ void app_main(void) {
     imk_proto_gate_tick();  // expire a stale fingerprint gate (25s)
     if (fingerprint_present()) {
       if (imk_proto_pairing_pending()) {
-        // Any live finger confirms physical presence for pairing.
-        imk_proto_on_fingerprint(0);
+        if (imk_proto_pairing_needs_match()) {
+          // Second-host pairing: this touch must MATCH an enrolled finger.
+          uint16_t page = 0, score = 0;
+          bool m = fingerprint_search(&page, &score);
+          if (!m) fingerprint_led(0x04, true);
+          imk_proto_on_pairing_touch(m);
+        } else {
+          // Presence stages: any live finger confirms.
+          imk_proto_on_pairing_touch(true);
+        }
       } else {
         uint16_t page = 0, score = 0;
         bool matched = false;

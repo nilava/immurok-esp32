@@ -24,6 +24,10 @@ void imk_proto_on_fingerprint(uint16_t page_id);
 // True while waiting for a fingerprint touch to confirm pairing (so the main
 // loop knows to route the next touch to pairing rather than auth).
 bool imk_proto_pairing_pending(void);
+// Second-host pairing needs a real enrolled-finger match on the next touch;
+// the main loop runs a search and reports the result here.
+bool imk_proto_pairing_needs_match(void);
+void imk_proto_on_pairing_touch(bool matched);
 
 // Fingerprint gate (verify-an-enrolled-finger before enroll/delete/auth).
 // While active, the main loop routes each touch's local match result here
