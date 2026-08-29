@@ -191,22 +191,30 @@ bool fingerprint_present(void) {
 #define AURA_ON      3
 #define AURA_OFF     4
 
-#define C_PINK   2
-#define C_BLUE   3
-#define C_GREEN  4
-#define C_CYAN   5
-#define C_RED    6
-#define C_PURPLE 7
+// 3-bit RGB mask per the datasheet: bit0 blue, bit1 green, bit2 red.
+#define C_OFF     0x00
+#define C_BLUE    0x01
+#define C_GREEN   0x02
+#define C_CYAN    0x03
+#define C_RED     0x04
+#define C_MAGENTA 0x05  // "purple" in the UI
+#define C_YELLOW  0x06
+#define C_WHITE   0x07
+#define C_PURPLE  C_MAGENTA
 
-// Triangulated with three sweeps: byte[1] (conventionally "speed") is what
-// actually SELECTS THE HUE for steady-on on this unit — byte[2] has no
-// effect on it at all (proven: holding byte[1]=1 fixed and varying byte[2]
-// 1..7 showed blue every time). So for AURA_ON, put the color index in
-// byte[1] and ignore byte[2] entirely (mirrored here only for readability
-// of captured packets, not because it does anything).
-static void aura(uint8_t mode, uint8_t speed, uint8_t color, uint8_t count) {
-  if (mode == AURA_ON) speed = color;
-  uint8_t params[] = {mode, speed, color, count};
+// Real spec (Hi-Link "Fingerprint module user communication protocol" v1.1,
+// §3.5.7 PS_ControlBLN — user supplied the datasheet, settling three rounds
+// of guessing): params are [function][starting color][ending color][cycles].
+// There is NO speed byte — every earlier "speed" value (60/100/25) was
+// landing in the starting-color field, which is why colors looked random.
+// Colors are a 3-bit RGB mask: bit0=blue bit1=green bit2=red (0x01 blue,
+// 0x02 green, 0x04 red, 0x03 cyan, 0x05 magenta, 0x06 yellow, 0x07 white,
+// 0x00 off). Functions: 1 breathe (start->end), 2 flash (alternates
+// start/end), 3 steady-on, 4 steady-off, 5 fade in, 6 fade out. For 3/4/5/6
+// the doc says starting/ending color should match; cycles is ignored for
+// 3-6 and 0 means "loop forever" for 1/2.
+static void aura(uint8_t function, uint8_t start_color, uint8_t end_color, uint8_t cycles) {
+  uint8_t params[] = {function, start_color, end_color, cycles};
   uint8_t confirm = 0xff;
   fp_command(CMD_AURA_LED, params, sizeof(params), &confirm, NULL, NULL, 1000);
 }
@@ -221,20 +229,21 @@ void fingerprint_led_set_connected(bool connected) {
 
 void fingerprint_led_state(fp_led_state_t s) {
   switch (s) {
-    case FP_LED_IDLE:         aura(AURA_ON, 0, C_PURPLE, 0); break;
-    case FP_LED_UNREACHABLE:  aura(AURA_ON, 0, C_PINK, 0); break;   // no yellow on this ring
-    case FP_LED_READING:      aura(AURA_ON, 0, C_CYAN, 0); break;   // no white on this ring
-    // No flash mode: on this ring a flash sequence swallows any command sent
-    // while it runs and then HOLDS its color, orphaning the idle repaint.
-    // Verdicts are steady holds; the callers time the return to idle.
-    case FP_LED_MATCH:        aura(AURA_ON, 0, C_GREEN, 0); break;
-    case FP_LED_NOMATCH:      aura(AURA_ON, 0, C_RED, 0); break;
-    case FP_LED_ENROLL_PLACE: aura(AURA_BREATHE, 100, C_BLUE, 0); break;
-    case FP_LED_ENROLL_LIFT:  aura(AURA_ON, 0, C_CYAN, 0); break;
-    case FP_LED_ENROLL_OK:    aura(AURA_ON, 0, C_GREEN, 0); break;
-    case FP_LED_ENROLL_FAIL:  aura(AURA_ON, 0, C_RED, 0); break;
-    case FP_LED_PAIRING:      aura(AURA_BREATHE, 60, C_PURPLE, 0); break;
-    case FP_LED_SWITCHING:    aura(AURA_ON, 0, C_BLUE, 0); break;
+    case FP_LED_IDLE:         aura(AURA_ON, C_PURPLE, C_PURPLE, 0); break;
+    case FP_LED_UNREACHABLE:  aura(AURA_ON, C_YELLOW, C_YELLOW, 0); break;
+    case FP_LED_READING:      aura(AURA_ON, C_WHITE, C_WHITE, 0); break;
+    // No flash function: earlier attempts showed this ring's flash sequence
+    // swallows commands sent while it runs and then holds its color,
+    // orphaning the idle repaint. Verdicts are steady holds instead; the
+    // callers time the return to idle.
+    case FP_LED_MATCH:        aura(AURA_ON, C_GREEN, C_GREEN, 0); break;
+    case FP_LED_NOMATCH:      aura(AURA_ON, C_RED, C_RED, 0); break;
+    case FP_LED_ENROLL_PLACE: aura(AURA_BREATHE, C_OFF, C_BLUE, 0); break;
+    case FP_LED_ENROLL_LIFT:  aura(AURA_ON, C_CYAN, C_CYAN, 0); break;
+    case FP_LED_ENROLL_OK:    aura(AURA_ON, C_GREEN, C_GREEN, 0); break;
+    case FP_LED_ENROLL_FAIL:  aura(AURA_ON, C_RED, C_RED, 0); break;
+    case FP_LED_PAIRING:      aura(AURA_BREATHE, C_OFF, C_PURPLE, 0); break;
+    case FP_LED_SWITCHING:    aura(AURA_ON, C_BLUE, C_BLUE, 0); break;
   }
 }
 
@@ -254,17 +263,18 @@ void fingerprint_led_idle(void) {
 }
 
 // Console diagnostic: sweep the seven indexed colors, 2s each, then idle.
+// Verifies the datasheet's RGB bit assignment (bit0 blue, bit1 green,
+// bit2 red) directly, mask 0..7, steady-on with start=end=mask.
 void fingerprint_led_sweep(void) {
-  for (int c = 1; c <= 7; c++) {
+  static const char *EXPECT[] = {"0=off", "1=blue", "2=green", "3=cyan",
+                                 "4=red", "5=magenta/purple", "6=yellow", "7=white"};
+  for (int m = 0; m <= 7; m++) {
     aura(AURA_OFF, 0, 0, 0);
     vTaskDelay(pdMS_TO_TICKS(500));
-    ESP_LOGW(TAG, "aura color index %d ...", c);
-    aura(AURA_ON, 0, (uint8_t)c, 0);   // aura() mirrors c into the real hue byte
+    ESP_LOGW(TAG, "aura mask %s ...", EXPECT[m]);
+    aura(AURA_ON, (uint8_t)m, (uint8_t)m, 0);
     vTaskDelay(pdMS_TO_TICKS(3000));
-    ESP_LOGW(TAG, "  (index %d shown above for the last 3s)", c);
   }
-  aura(AURA_OFF, 0, 0, 0);
-  vTaskDelay(pdMS_TO_TICKS(300));
   fingerprint_led_idle();
 }
 
