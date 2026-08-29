@@ -200,6 +200,11 @@ bool fingerprint_present(void) {
 #define C_WHITE  7
 
 static void aura(uint8_t mode, uint8_t speed, uint8_t color, uint8_t count) {
+  // ZW101 quirk (differs from the R503): a ZERO in the speed byte of a
+  // steady-on command darkens the ring entirely. Every proven steady call on
+  // this unit carried the color there too, so mirror the color into byte 2
+  // for steady mode; flash/breathe use it as a real speed.
+  if (mode == AURA_ON) speed = color;
   uint8_t params[] = {mode, speed, color, count};
   uint8_t confirm = 0xff;
   fp_command(CMD_AURA_LED, params, sizeof(params), &confirm, NULL, NULL, 1000);
