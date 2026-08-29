@@ -172,7 +172,8 @@ void fingerprint_init(void) {
   if (!verify) ESP_LOGW(TAG, "sensor verify failed on both orientations");
 
   int n = fingerprint_count();
-  ESP_LOGI(TAG, "sensor init: %d template(s) enrolled", n);
+  ESP_LOGI(TAG, "sensor init: %d template(s) enrolled, index bitmap=0x%02x",
+           n, fingerprint_index_bitmap());
   fingerprint_led_idle();  // calm purple breathing
 }
 
@@ -197,7 +198,9 @@ void fingerprint_led_breathe(uint8_t color) {
   fp_command(CMD_AURA_LED, params, sizeof(params), &confirm, NULL, NULL, 1000);
 }
 
-void fingerprint_led_idle(void) { fingerprint_led_breathe(0x03); }  // purple
+// Breathing on this ZW101 runs at a fixed, frantic pace and washes purple out
+// to blue — steady is the calm, proven mode, so idle holds steady purple.
+void fingerprint_led_idle(void) { fingerprint_led(0x03, true); }
 
 int fingerprint_count(void) {
   for (int attempt = 0; attempt < 3; attempt++) {
@@ -317,7 +320,7 @@ bool fingerprint_enroll_stream(uint16_t slot,
 
   for (uint8_t i = 1; i <= TOTAL; i++) {
     if (progress) progress(0x00, i - 1, TOTAL);  // waiting for finger
-    fingerprint_led_breathe(0x01);  // blue breathing: waiting for a finger
+    fingerprint_led(0x01, true);  // steady blue: waiting for a finger
     ESP_LOGI(TAG, "enroll: waiting for finger %u/%u", i, TOTAL);
     // Wait for a finger to be present, then capture into buffer i. Re-send the
     // "waiting" frame every ~3s — the app uses it as an enrollment keep-alive.
