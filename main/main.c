@@ -104,8 +104,10 @@ void app_main(void) {
         uint16_t page = 0, score = 0;
         bool matched = false;
         // Paint once for the whole touch, not per retry — search() itself no
-        // longer paints, so this doesn't flicker between attempts.
-        fingerprint_led_state(FP_LED_READING);
+        // longer paints, so this doesn't flicker between attempts. Skip it
+        // when a gate is already breathing its own color (cyan "verify to
+        // proceed") — forcing purple over that would clash mid-breath.
+        if (!imk_proto_gate_active()) fingerprint_led_state(FP_LED_READING);
         // The first frame of a touch is often poor (cold sensor, light touch);
         // retry while the finger is still down before calling it a miss.
         for (int attempt = 0; attempt < 3 && !matched; attempt++) {

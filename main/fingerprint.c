@@ -213,46 +213,23 @@ bool fingerprint_present(void) {
 // start/end), 3 steady-on, 4 steady-off, 5 fade in, 6 fade out. For 3/4/5/6
 // the doc says starting/ending color should match; cycles is ignored for
 // 3-6 and 0 means "loop forever" for 1/2.
-static void aura(uint8_t function, uint8_t start_color, uint8_t end_color, uint8_t cycles) {
-  uint8_t params[] = {function, start_color, end_color, cycles};
+// Two DIFFERENT parameter conventions coexist in this command, confirmed by
+// direct sweep testing: for steady-on (function 3), byte[1] is the color and
+// byte[2] is ignored. For breathe/flash (functions 1/2), the datasheet's
+// "starting/ending color" framing didn't produce any visible animation when
+// tried; dashtouch — a real project driving genuine smooth breathing on this
+// same sensor family — uses byte[1] as a SPEED and byte[2] as the color for
+// those functions, so that's the convention used here.
+static void aura(uint8_t function, uint8_t p1, uint8_t p2, uint8_t count) {
+  uint8_t params[] = {function, p1, p2, count};
   uint8_t confirm = 0xff;
   fp_command(CMD_AURA_LED, params, sizeof(params), &confirm, NULL, NULL, 1000);
 }
 
-// Software breathing: the module's own breathe function proved unreliable on
-// this unit (mirrors the earlier flash-mode failure), so drive a slow pulse
-// ourselves — on for a beat, a shorter dark gap, repeat — guaranteed correct
-// regardless of module firmware quirks. Runs in a dedicated low-priority task
-// so it can be interrupted the instant a real state change happens.
-static TaskHandle_t s_breathe_task;
-static volatile bool s_breathe_active;
-static volatile uint8_t s_breathe_color;
-
-static void breathe_task(void *arg) {
-  (void)arg;
-  bool lit = false;
-  while (1) {
-    if (!s_breathe_active) { lit = false; vTaskDelay(pdMS_TO_TICKS(150)); continue; }
-    if (lit) {
-      aura(AURA_OFF, 0, 0, 0);
-      vTaskDelay(pdMS_TO_TICKS(450));
-    } else {
-      aura(AURA_ON, s_breathe_color, s_breathe_color, 0);
-      vTaskDelay(pdMS_TO_TICKS(950));
-    }
-    lit = !lit;
-  }
-}
-
-static void breathe_start(uint8_t color) {
-  s_breathe_color = color;
-  s_breathe_active = true;
-  if (!s_breathe_task) {
-    xTaskCreate(breathe_task, "led_breathe", 2560, NULL, 3, &s_breathe_task);
-  }
-}
-
-static void breathe_stop(void) { s_breathe_active = false; }
+static void aura_steady(uint8_t color) { aura(AURA_ON, color, color, 0); }
+static void aura_off(void) { aura(AURA_OFF, 0, 0, 0); }
+// speed ~0 fast .. 255 slow; 100 reads as a calm multi-second fade.
+static void aura_breathe(uint8_t color) { aura(AURA_BREATHE, 100, color, 0); }
 
 // Whether a host is connected steers what "idle" looks like (purple = ready,
 // yellow = can't reach a computer). Set from the BLE layer.
@@ -264,22 +241,22 @@ void fingerprint_led_set_connected(bool connected) {
 
 void fingerprint_led_state(fp_led_state_t s) {
   switch (s) {
-    case FP_LED_IDLE:         breathe_stop(); aura(AURA_ON, C_PURPLE, C_PURPLE, 0); break;
-    case FP_LED_UNREACHABLE:  breathe_start(C_RED); break;
-    case FP_LED_READING:      breathe_start(C_WHITE); break;
+    case FP_LED_IDLE:         aura_steady(C_PURPLE); break;
+    case FP_LED_UNREACHABLE:  aura_breathe(C_RED); break;
+    case FP_LED_READING:      aura_breathe(C_PURPLE); break;  // breathing version of idle
     // No flash function: earlier attempts showed this ring's flash sequence
     // swallows commands sent while it runs and then holds its color,
     // orphaning the idle repaint. Verdicts are steady holds instead; the
     // callers time the return to idle.
-    case FP_LED_MATCH:        breathe_stop(); aura(AURA_ON, C_GREEN, C_GREEN, 0); break;
-    case FP_LED_NOMATCH:      breathe_stop(); aura(AURA_ON, C_RED, C_RED, 0); break;
-    case FP_LED_ENROLL_PLACE: breathe_start(C_BLUE); break;
-    case FP_LED_ENROLL_LIFT:  breathe_stop(); aura(AURA_ON, C_CYAN, C_CYAN, 0); break;
-    case FP_LED_ENROLL_OK:    breathe_stop(); aura(AURA_ON, C_GREEN, C_GREEN, 0); break;
-    case FP_LED_ENROLL_FAIL:  breathe_stop(); aura(AURA_ON, C_RED, C_RED, 0); break;
-    case FP_LED_PAIRING:      breathe_start(C_PURPLE); break;
-    case FP_LED_SWITCHING:    breathe_stop(); aura(AURA_ON, C_BLUE, C_BLUE, 0); break;
-    case FP_LED_AUTH_WAIT:    breathe_start(C_CYAN); break;
+    case FP_LED_MATCH:        aura_steady(C_GREEN); break;
+    case FP_LED_NOMATCH:      aura_steady(C_RED); break;
+    case FP_LED_ENROLL_PLACE: aura_breathe(C_BLUE); break;
+    case FP_LED_ENROLL_LIFT:  aura_steady(C_CYAN); break;
+    case FP_LED_ENROLL_OK:    aura_steady(C_GREEN); break;
+    case FP_LED_ENROLL_FAIL:  aura_steady(C_RED); break;
+    case FP_LED_PAIRING:      aura_breathe(C_PURPLE); break;
+    case FP_LED_SWITCHING:    aura_steady(C_BLUE); break;
+    case FP_LED_AUTH_WAIT:    aura_breathe(C_CYAN); break;
   }
 }
 
@@ -305,10 +282,10 @@ void fingerprint_led_sweep(void) {
   static const char *EXPECT[] = {"0=off", "1=blue", "2=green", "3=cyan",
                                  "4=red", "5=magenta/purple", "6=yellow", "7=white"};
   for (int m = 0; m <= 7; m++) {
-    aura(AURA_OFF, 0, 0, 0);
+    aura_off();
     vTaskDelay(pdMS_TO_TICKS(500));
     ESP_LOGW(TAG, "aura mask %s ...", EXPECT[m]);
-    aura(AURA_ON, (uint8_t)m, (uint8_t)m, 0);
+    aura_steady((uint8_t)m);
     vTaskDelay(pdMS_TO_TICKS(3000));
   }
   fingerprint_led_idle();
