@@ -145,12 +145,17 @@ bool imk_ks_delete(uint8_t cat, uint8_t idx) {
   if (cat >= 3 || idx >= s_count[cat]) return false;
   uint8_t *buf = cat_buf(cat);
   uint16_t es = CATS[cat].entry_size;
-  // Compact: entries stay contiguous 0..count-1 (the app indexes by position).
-  memmove(buf + (size_t)idx * es, buf + (size_t)(idx + 1) * es,
-          (size_t)(s_count[cat] - idx - 1) * es);
-  s_count[cat]--;
-  memset(buf + (size_t)s_count[cat] * es, 0, es);
-  ESP_LOGI(TAG, "delete cat %u idx %u", cat, idx);
+  // Swap-delete, matching the reference firmware: the LAST entry moves into
+  // the freed slot. The app mirrors exactly this in its caches
+  // (SSHKeyCache.applySwapDelete) — shift-compaction would silently desync
+  // every index after the deleted one.
+  uint8_t last = s_count[cat] - 1;
+  if (idx != last) {
+    memcpy(buf + (size_t)idx * es, buf + (size_t)last * es, es);
+  }
+  s_count[cat] = last;
+  memset(buf + (size_t)last * es, 0, es);
+  ESP_LOGI(TAG, "swap-delete cat %u idx %u (moved idx %u in)", cat, idx, last);
   return persist(cat);
 }
 
