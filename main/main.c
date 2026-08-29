@@ -31,6 +31,12 @@ static void console_task(void *arg) {
       ESP_LOGW(TAG, "restarting…");
       vTaskDelay(pdMS_TO_TICKS(80));
       esp_restart();
+    } else if (c == 'i' || c == 'I') {
+      // Diagnostics: live count + index bitmap + which of slots 0..7 load.
+      int n = fingerprint_count();
+      uint8_t bm = fingerprint_index_bitmap();
+      ESP_LOGW(TAG, "info: count=%d bitmap=0x%02x loadable=[%s]", n, bm,
+               fingerprint_slot_probe());
     } else if (c == 'w' || c == 'W') {
       ESP_LOGW(TAG, "wiping all fingerprint templates…");
       bool ok = fingerprint_delete_all();

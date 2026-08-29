@@ -32,6 +32,7 @@ bool fingerprint_delete_all(void);
 int fingerprint_count(void);
 int fingerprint_cached_count(void);  // last known count, no UART access
 uint8_t fingerprint_index_bitmap(void);  // bit i set = slot i enrolled (slots 0..7)
+const char *fingerprint_slot_probe(void);  // "01..3..." map of loadable slots 0..7
 
 // Ring LED (aura). color is a 3-bit mask: blue 0x01, green 0x02, red 0x04
 // (purple 0x03, white 0x07). steady=true holds; steady=false = one clean blink.

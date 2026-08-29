@@ -365,10 +365,49 @@ bool fingerprint_enroll_stream(uint16_t slot,
     if (progress) progress(0xFF, TOTAL, TOTAL);
     return false;
   }
+  // Trust but verify: this sensor has ACKed stores that didn't persist. Probe
+  // the slot with LoadChar into buffer 2; if it can't load back, retry the
+  // store once, and fail the enrollment loudly rather than pretend.
+  for (int attempt = 0; attempt < 2; attempt++) {
+    uint8_t probe[] = {0x02, (uint8_t)(slot >> 8), (uint8_t)(slot & 0xff)};
+    confirm = 0xff;
+    bool loaded = fp_command(CMD_LOAD_CHAR, probe, sizeof(probe), &confirm, NULL, NULL, 1000) &&
+                  confirm == 0x00;
+    ESP_LOGI(TAG, "enroll verify LoadChar page %u: %s (confirm=0x%02x)",
+             slot, loaded ? "ok" : "MISSING", confirm);
+    if (loaded) break;
+    if (attempt == 1) {
+      if (progress) progress(0xFF, TOTAL, TOTAL);
+      return false;
+    }
+    ESP_LOGW(TAG, "store did not persist; retrying Store");
+    vTaskDelay(pdMS_TO_TICKS(200));
+    confirm = 0xff;
+    if (!fp_command(CMD_STORE, params, sizeof(params), &confirm, NULL, NULL, 1500) ||
+        confirm != 0x00) {
+      if (progress) progress(0xFF, TOTAL, TOTAL);
+      return false;
+    }
+  }
   if (progress) progress(0x04, TOTAL, TOTAL);  // complete
   fingerprint_led(0x02, true);  // steady green: enrolled
   fingerprint_count();  // refresh cached_count
   return true;
+}
+
+// Probe slots 0..7 with LoadChar; returns a static string like "01......"
+// marking which slots actually hold a loadable template.
+const char *fingerprint_slot_probe(void) {
+  static char out[9];
+  for (uint16_t s = 0; s < 8; s++) {
+    uint8_t probe[] = {0x02, (uint8_t)(s >> 8), (uint8_t)(s & 0xff)};
+    uint8_t confirm = 0xff;
+    bool ok = fp_command(CMD_LOAD_CHAR, probe, sizeof(probe), &confirm, NULL, NULL, 800) &&
+              confirm == 0x00;
+    out[s] = ok ? ('0' + (s % 10)) : '.';
+  }
+  out[8] = 0;
+  return out;
 }
 
 uint8_t fingerprint_index_bitmap(void) {
