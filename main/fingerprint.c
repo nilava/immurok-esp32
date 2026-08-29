@@ -253,7 +253,7 @@ bool fingerprint_search(uint16_t *page_id, uint16_t *score) {
   uint8_t data[4];
   size_t len = sizeof(data);
   bool sok = fp_command(CMD_SEARCH, params, sizeof(params), &confirm, data, &len, 2000);
-  ESP_LOGI(TAG, "Search: ok=%d confirm=0x%02x len=%u data=%02x %02x %02x %02x",
+  ESP_LOGD(TAG, "Search: ok=%d confirm=0x%02x len=%u data=%02x %02x %02x %02x",
            sok, confirm, (unsigned)len,
            len > 0 ? data[0] : 0, len > 1 ? data[1] : 0,
            len > 2 ? data[2] : 0, len > 3 ? data[3] : 0);
@@ -282,7 +282,7 @@ bool fingerprint_search(uint16_t *page_id, uint16_t *score) {
     confirm = 0xff;
     bool mok = fp_command(CMD_MATCH, NULL, 0, &confirm, mdata, &mlen, 1000);
     uint16_t s = (mlen >= 2) ? (((uint16_t)mdata[0] << 8) | mdata[1]) : 0;
-    ESP_LOGI(TAG, "slot %u: Match ok=%d confirm=0x%02x score=%u", slot, mok, confirm, s);
+    ESP_LOGD(TAG, "slot %u: Match ok=%d confirm=0x%02x score=%u", slot, mok, confirm, s);
     if (mok && confirm == 0x00 && s >= MATCH_MIN_SCORE) {
       if (page_id) *page_id = slot;
       if (score) *score = s;
@@ -440,7 +440,7 @@ bool fingerprint_delete(uint16_t slot) {
 bool fingerprint_delete_all(void) {
   uint8_t confirm = 0xff;
   bool ok = fp_command(CMD_EMPTY, NULL, 0, &confirm, NULL, NULL, 3000) && confirm == 0x00;
-  ESP_LOGI(TAG, "Empty: ok=%d confirm=0x%02x", ok, confirm);
+  ESP_LOGD(TAG, "Empty: ok=%d confirm=0x%02x", ok, confirm);
   if (ok) return true;
   // Some units reject Empty; sweep slots with DeleteChar(slot, 1) instead.
   bool any_fail = false;
