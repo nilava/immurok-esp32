@@ -209,6 +209,7 @@ int fingerprint_count(void) {
     size_t len = sizeof(data);
     if (fp_command(CMD_TEMPLATE_NUM, NULL, 0, &confirm, data, &len, 1000) &&
         confirm == 0x00 && len >= 2) {
+      ESP_LOGD(TAG, "TemplateNum raw: %02x %02x", data[0], data[1]);
       cached_count = ((int)data[0] << 8) | data[1];
       return cached_count;
     }
@@ -251,8 +252,12 @@ bool fingerprint_search(uint16_t *page_id, uint16_t *score) {
   uint8_t confirm = 0xff;
   uint8_t data[4];
   size_t len = sizeof(data);
-  if (fp_command(CMD_SEARCH, params, sizeof(params), &confirm, data, &len, 2000) &&
-      confirm == 0x00 && len >= 4) {
+  bool sok = fp_command(CMD_SEARCH, params, sizeof(params), &confirm, data, &len, 2000);
+  ESP_LOGI(TAG, "Search: ok=%d confirm=0x%02x len=%u data=%02x %02x %02x %02x",
+           sok, confirm, (unsigned)len,
+           len > 0 ? data[0] : 0, len > 1 ? data[1] : 0,
+           len > 2 ? data[2] : 0, len > 3 ? data[3] : 0);
+  if (sok && confirm == 0x00 && len >= 4) {
     uint16_t s = ((uint16_t)data[2] << 8) | data[3];
     if (s >= MATCH_MIN_SCORE) {
       if (page_id) *page_id = ((uint16_t)data[0] << 8) | data[1];
@@ -275,16 +280,14 @@ bool fingerprint_search(uint16_t *page_id, uint16_t *score) {
     uint8_t mdata[2];
     size_t mlen = sizeof(mdata);
     confirm = 0xff;
-    if (fp_command(CMD_MATCH, NULL, 0, &confirm, mdata, &mlen, 1000) &&
-        confirm == 0x00 && mlen >= 2) {
-      uint16_t s = ((uint16_t)mdata[0] << 8) | mdata[1];
-      ESP_LOGI(TAG, "match slot %u: score=%u", slot, s);
-      if (s >= MATCH_MIN_SCORE) {
-        if (page_id) *page_id = slot;
-        if (score) *score = s;
-        fingerprint_led(0x02, true);  // steady green: matched
-        return true;
-      }
+    bool mok = fp_command(CMD_MATCH, NULL, 0, &confirm, mdata, &mlen, 1000);
+    uint16_t s = (mlen >= 2) ? (((uint16_t)mdata[0] << 8) | mdata[1]) : 0;
+    ESP_LOGI(TAG, "slot %u: Match ok=%d confirm=0x%02x score=%u", slot, mok, confirm, s);
+    if (mok && confirm == 0x00 && s >= MATCH_MIN_SCORE) {
+      if (page_id) *page_id = slot;
+      if (score) *score = s;
+      fingerprint_led(0x02, true);  // steady green: matched
+      return true;
     }
   }
 
@@ -436,5 +439,20 @@ bool fingerprint_delete(uint16_t slot) {
 
 bool fingerprint_delete_all(void) {
   uint8_t confirm = 0xff;
-  return fp_command(CMD_EMPTY, NULL, 0, &confirm, NULL, NULL, 2000) && confirm == 0x00;
+  bool ok = fp_command(CMD_EMPTY, NULL, 0, &confirm, NULL, NULL, 3000) && confirm == 0x00;
+  ESP_LOGI(TAG, "Empty: ok=%d confirm=0x%02x", ok, confirm);
+  if (ok) return true;
+  // Some units reject Empty; sweep slots with DeleteChar(slot, 1) instead.
+  bool any_fail = false;
+  for (uint16_t slot = 0; slot <= 15; slot++) {
+    uint8_t params[] = {(uint8_t)(slot >> 8), (uint8_t)(slot & 0xff), 0x00, 0x01};
+    confirm = 0xff;
+    bool dok = fp_command(CMD_DELETE_CHAR, params, sizeof(params), &confirm, NULL, NULL, 1500);
+    if (!dok || (confirm != 0x00 && confirm != 0x10)) {  // 0x10 = delete failed/empty on some fw
+      ESP_LOGW(TAG, "DeleteChar slot %u: ok=%d confirm=0x%02x", slot, dok, confirm);
+      any_fail = true;
+    }
+    vTaskDelay(pdMS_TO_TICKS(30));
+  }
+  return !any_fail;
 }
