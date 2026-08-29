@@ -181,7 +181,10 @@ void imk_proto_handle(const uint8_t *pkt, size_t len) {
       // [0x10][slot]. First-time enroll needs no FP gate; start immediately.
       uint8_t app_slot = (plen >= 1) ? payload[0] : 0;
       uint16_t page = app_slot + 1;  // sensor page (page 0 is unusable)
-      if (fingerprint_cached_count() > 0) {
+      // Gate on app-visible slots (index bitmap >> 1), not the raw template
+      // count: a ghost template at the unusable page 0 inflates the count but
+      // can never pass the gate, which would deadlock enrollment.
+      if ((fingerprint_index_bitmap() >> 1) != 0) {
         // Existing prints: require verifying an enrolled finger first.
         gate_arm(GATE_ENROLL, page);
         send1(ST_WAIT_FP);  // responses are status-first (no cmd echo)
