@@ -178,8 +178,9 @@ void imk_proto_handle(const uint8_t *pkt, size_t len) {
         ST_OK, bitmap,
         (uint8_t)(imk_crypto_is_paired() ? 1 : 0),
         100,           // battery %
-        0, 1, 0,       // fw major.minor.patch
-        0, 1,          // build (big-endian)
+        99, 0, 0,      // fw major.minor.patch — deliberately far above any
+        0, 1,          // released manifest so the app never prompts an update
+                       // (this firmware updates over USB, not immurok OTA)
       };
       send_raw(body, sizeof(body));
       break;
