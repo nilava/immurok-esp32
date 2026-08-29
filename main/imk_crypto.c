@@ -84,15 +84,16 @@ static bool addr_zero(const uint8_t a[6]) {
 }
 
 // Select which host slot the live connection belongs to, by peer address.
-// A slot with a key but no recorded address (legacy migration) adopts the
-// first bonded host that connects.
-void imk_crypto_select_host(const uint8_t bda[6]) {
+// `authenticated` means bda is the bonded IDENTITY address (auth-complete);
+// only then may a legacy zero-address slot adopt the host — the address at
+// connect time can be an unresolved RPA and must never be persisted.
+void imk_crypto_select_host2(const uint8_t bda[6], bool authenticated) {
   memcpy(current_bda, bda, 6);
   active_slot = -1;
   for (int s = 0; s < 2; s++) {
     if (paired_slot[s] && memcmp(host_addr[s], bda, 6) == 0) { active_slot = s; break; }
   }
-  if (active_slot < 0) {
+  if (active_slot < 0 && authenticated) {
     for (int s = 0; s < 2; s++) {
       if (paired_slot[s] && addr_zero(host_addr[s])) {
         memcpy(host_addr[s], bda, 6);
@@ -104,7 +105,22 @@ void imk_crypto_select_host(const uint8_t bda[6]) {
       }
     }
   }
-  ESP_LOGI(TAG, "host selected: slot %d", active_slot);
+  ESP_LOGI(TAG, "host selected: slot %d (%s addr)", active_slot,
+           authenticated ? "identity" : "connect");
+}
+
+void imk_crypto_select_host(const uint8_t bda[6]) {
+  imk_crypto_select_host2(bda, false);
+}
+
+void imk_crypto_dump_slots(void) {
+  for (int s = 0; s < 2; s++) {
+    const uint8_t *a = host_addr[s];
+    ESP_LOGW(TAG, "slot %d: %s addr=%02x:%02x:%02x:%02x:%02x:%02x%s", s,
+             paired_slot[s] ? "PAIRED" : "empty",
+             a[0], a[1], a[2], a[3], a[4], a[5],
+             (s == active_slot) ? "  <- active" : "");
+  }
 }
 
 bool imk_crypto_is_paired(void) { return active_slot >= 0 && paired_slot[active_slot]; }

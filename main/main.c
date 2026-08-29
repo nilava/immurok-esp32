@@ -32,6 +32,13 @@ static void console_task(void *arg) {
       ESP_LOGW(TAG, "restarting…");
       vTaskDelay(pdMS_TO_TICKS(80));
       esp_restart();
+    } else if (c == 'p' || c == 'P') {
+      imk_crypto_dump_slots();
+    } else if (c == 'u' || c == 'U') {
+      ESP_LOGW(TAG, "clearing BOTH host bindings (fingerprints untouched)…");
+      imk_unpair_slot(0);
+      imk_unpair_slot(1);
+      ESP_LOGW(TAG, "host bindings cleared; re-pair each computer");
     } else if (c == 'i' || c == 'I') {
       // Diagnostics: live count + index bitmap + which of slots 0..7 load.
       int n = fingerprint_count();
@@ -64,7 +71,7 @@ void app_main(void) {
   imk_keystore_init();
   imk_proto_init(imk_service_respond);
   imk_service_start();
-  ESP_LOGI(TAG, "immurok-esp32 boot; console: d=download r=restart w=wipe fingerprints");
+  ESP_LOGI(TAG, "immurok-esp32 boot; console: d=download r=restart w=wipe-fp i=info p=slots u=unbind-hosts");
   (void)prompt;
 
   // On a fingerprint touch: during pairing it drives the ECDH pubkey exchange;

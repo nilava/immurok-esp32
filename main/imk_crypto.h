@@ -23,7 +23,9 @@ void imk_unpair(void);                 // clear the connected host's binding
 void imk_unpair_slot(int slot);        // clear a specific host slot (0/1)
 
 // Dual-host: pick the key slot for the connected peer (by bonded address).
-void imk_crypto_select_host(const uint8_t bda[6]);
+void imk_crypto_select_host(const uint8_t bda[6]);           // match only
+void imk_crypto_select_host2(const uint8_t bda[6], bool authenticated);
+void imk_crypto_dump_slots(void);  // log both slots' state
 bool imk_crypto_any_paired(void);
 uint8_t imk_crypto_slot_bitmap(void);      // bit0 = slot 1, bit1 = slot 2
 int imk_crypto_free_slot(void);            // 0/1, or -1 when both bound

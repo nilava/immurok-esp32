@@ -190,8 +190,9 @@ static void gap_handler(esp_gap_ble_cb_event_t event, esp_ble_gap_cb_param_t *pa
                param->ble_security.auth_cmpl.success ? "success" : "FAIL");
       if (param->ble_security.auth_cmpl.success) {
         // Re-select with the identity address (the connect event may have
-        // carried a resolvable private address for a bonded host).
-        imk_crypto_select_host(param->ble_security.auth_cmpl.bd_addr);
+        // carried a resolvable private address for a bonded host). Legacy
+        // zero-address slots may only adopt a host HERE.
+        imk_crypto_select_host2(param->ble_security.auth_cmpl.bd_addr, true);
       }
       break;
     case ESP_GAP_BLE_SEC_REQ_EVT:
