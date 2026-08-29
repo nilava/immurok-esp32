@@ -181,23 +181,22 @@ bool fingerprint_present(void) {
   return gpio_get_level(FP_INT_PIN) == FP_INT_ACTIVE;
 }
 
-// Aura params (verified on this sensor family by dashtouch's fp_colors
-// diagnostic): [mode][speed][color][count]. Modes: 1=breathe 2=flash
-// 3=steady-on 4=off. Speed: ~0 fast … 255 slow (100 = calm multi-second
-// fade). Colors are an INDEX, not a mask: 1=red 2=blue 3=purple 4=green
-// 5=yellow 6=cyan 7=white.
+// Aura params: [mode][speed][color][count]. Modes: 1=breathe 2=flash
+// 3=steady-on 4=off. Speed: ~0 fast … 255 slow (100 = calm fade).
+// Color indices are UNIT-SPECIFIC — swept on this ZW101 with the 'c'
+// console key (2026-08-29): 1=off 2=pink 3=blue 4=green 5=cyan 6=red
+// 7=purple. No white or yellow on this ring.
 #define AURA_BREATHE 1
 #define AURA_FLASH   2
 #define AURA_ON      3
 #define AURA_OFF     4
 
-#define C_RED    1
-#define C_BLUE   2
-#define C_PURPLE 3
+#define C_PINK   2
+#define C_BLUE   3
 #define C_GREEN  4
-#define C_YELLOW 5
-#define C_CYAN   6
-#define C_WHITE  7
+#define C_CYAN   5
+#define C_RED    6
+#define C_PURPLE 7
 
 static void aura(uint8_t mode, uint8_t speed, uint8_t color, uint8_t count) {
   // ZW101 quirk (differs from the R503): a ZERO in the speed byte of a
@@ -221,11 +220,11 @@ void fingerprint_led_set_connected(bool connected) {
 void fingerprint_led_state(fp_led_state_t s) {
   switch (s) {
     case FP_LED_IDLE:         aura(AURA_ON, 0, C_PURPLE, 0); break;
-    case FP_LED_UNREACHABLE:  aura(AURA_ON, 0, C_YELLOW, 0); break;
-    case FP_LED_READING:      aura(AURA_ON, 0, C_WHITE, 0); break;
+    case FP_LED_UNREACHABLE:  aura(AURA_ON, 0, C_PINK, 0); break;   // no yellow on this ring
+    case FP_LED_READING:      aura(AURA_ON, 0, C_CYAN, 0); break;   // no white on this ring
     case FP_LED_MATCH:        aura(AURA_FLASH, 25, C_GREEN, 2); break;
     case FP_LED_NOMATCH:      aura(AURA_FLASH, 25, C_RED, 2); break;
-    case FP_LED_ENROLL_PLACE: aura(AURA_BREATHE, 100, C_WHITE, 0); break;
+    case FP_LED_ENROLL_PLACE: aura(AURA_BREATHE, 100, C_BLUE, 0); break;
     case FP_LED_ENROLL_LIFT:  aura(AURA_ON, 0, C_CYAN, 0); break;
     case FP_LED_ENROLL_OK:    aura(AURA_FLASH, 25, C_GREEN, 3); break;
     case FP_LED_ENROLL_FAIL:  aura(AURA_FLASH, 25, C_RED, 3); break;
@@ -251,8 +250,8 @@ void fingerprint_led_idle(void) {
 
 // Console diagnostic: sweep the seven indexed colors, 2s each, then idle.
 void fingerprint_led_sweep(void) {
-  static const char *NAMES[] = {"?", "1=red", "2=blue", "3=purple", "4=green",
-                                "5=yellow", "6=cyan", "7=white"};
+  static const char *NAMES[] = {"?", "1=off?", "2=pink", "3=blue", "4=green",
+                                "5=cyan", "6=red", "7=purple"};
   for (int c = 1; c <= 7; c++) {
     ESP_LOGW(TAG, "aura color %s", NAMES[c]);
     aura(AURA_ON, 0, (uint8_t)c, 0);
