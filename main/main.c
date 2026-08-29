@@ -8,6 +8,7 @@
 
 #include "fingerprint.h"
 #include "imk_crypto.h"
+#include "imk_keystore.h"
 #include "imk_proto.h"
 #include "imk_service.h"
 
@@ -60,6 +61,7 @@ void app_main(void) {
 
   fingerprint_init();
   imk_crypto_init();
+  imk_keystore_init();
   imk_proto_init(imk_service_respond);
   imk_service_start();
   ESP_LOGI(TAG, "immurok-esp32 boot; console: d=download r=restart w=wipe fingerprints");

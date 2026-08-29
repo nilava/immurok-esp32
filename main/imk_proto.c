@@ -9,6 +9,7 @@
 
 #include "imk_crypto.h"
 #include "fingerprint.h"
+#include "imk_keystore.h"
 
 static const char *TAG = "imk_proto";
 
@@ -28,6 +29,16 @@ static const char *TAG = "imk_proto";
 #define CMD_CHALLENGE     0x38
 #define CMD_SLOT_STATUS   0x39
 #define CMD_SLOT_CLEAR    0x3C
+#define CMD_KEY_COUNT     0x60
+#define CMD_KEY_READ      0x61
+#define CMD_KEY_WRITE     0x62
+#define CMD_KEY_DELETE    0x63
+#define CMD_KEY_COMMIT    0x64
+#define CMD_KEY_SIGN      0x65
+#define CMD_KEY_GET_PUB   0x66
+#define CMD_KEY_GENERATE  0x67
+#define CMD_KEY_RESULT    0x68
+#define CMD_KEY_OTP_GET   0x69
 
 // Status/response bytes.
 #define ST_OK          0x00
@@ -50,7 +61,15 @@ static uint16_t s_enroll_slot;
 // Fingerprint gate: sensitive ops (enroll-with-existing-prints, auth/test) first
 // require verifying an already-enrolled finger. Reply WAIT_FP, wait for a touch
 // that produces a signed [0x21] the app verifies, then FP_MATCH_ACK runs the op.
-typedef enum { GATE_NONE, GATE_AUTH, GATE_ENROLL, GATE_DELETE } gate_t;
+typedef enum { GATE_NONE, GATE_AUTH, GATE_ENROLL, GATE_DELETE, GATE_KEYOP } gate_t;
+
+// Keystore operation buffered behind the fingerprint gate.
+typedef struct {
+  uint8_t op, cat, idx;
+  uint8_t hash[32];
+  uint32_t ts;
+} keyop_t;
+static keyop_t s_keyop;
 static gate_t s_gate;
 static uint16_t s_gate_page;      // enroll target / delete target (sensor page)
 static uint8_t s_gate_attempts;   // wrong-finger count (3 strikes)
@@ -79,6 +98,57 @@ static void send2(uint8_t b0, uint8_t b1) {
 }
 
 static void send1(uint8_t b0) { send_raw(&b0, 1); }
+
+// Sensitive ops are gated only when there is a finger that could pass the gate.
+static bool gate_needed(void) { return (fingerprint_index_bitmap() >> 1) != 0; }
+
+// Execute a buffered keystore op; sends its result frame. Runs ungated (no
+// prints enrolled) straight from the dispatcher, or post-gate from the touch
+// handler.
+static void keyop_execute(void) {
+  switch (s_keyop.op) {
+    case CMD_KEY_COMMIT:
+      send1(imk_ks_commit(s_keyop.cat, s_keyop.idx) ? ST_OK : ST_ERROR);
+      break;
+    case CMD_KEY_DELETE:
+      send1(imk_ks_delete(s_keyop.cat, s_keyop.idx) ? ST_OK : ST_ERROR);
+      break;
+    case CMD_KEY_SIGN: {
+      if (imk_ks_sign(s_keyop.idx, s_keyop.hash)) {
+        uint8_t r[2] = {ST_OK, 64};
+        send_raw(r, 2);
+      } else {
+        send1(ST_ERROR);
+      }
+      break;
+    }
+    case CMD_KEY_GENERATE: {
+      uint8_t new_idx = 0;
+      if (imk_ks_generate(s_keyop.hash, &new_idx)) {  // hash[0..15] holds the name
+        uint8_t r[3] = {ST_OK, 64, new_idx};
+        send_raw(r, 3);
+      } else {
+        send1(ST_ERROR);
+      }
+      break;
+    }
+    case CMD_KEY_OTP_GET: {
+      char code[6];
+      if (imk_ks_totp(s_keyop.idx, s_keyop.ts, code)) {
+        uint8_t r[7];
+        r[0] = ST_OK;
+        memcpy(r + 1, code, 6);
+        send_raw(r, 7);
+      } else {
+        send1(ST_ERROR);
+      }
+      break;
+    }
+    default:
+      send1(ST_ERROR);
+      break;
+  }
+}
 
 void imk_proto_init(imk_send_fn send) {
   s_send = send;
@@ -248,6 +318,119 @@ void imk_proto_handle(const uint8_t *pkt, size_t len) {
       break;
     }
 
+    case CMD_KEY_COUNT: {
+      uint8_t cat = (plen >= 1) ? payload[0] : 0;
+      uint32_t crc = imk_ks_checksum(cat);
+      uint8_t body[6] = {ST_OK, (uint8_t)imk_ks_count(cat),
+                         (uint8_t)crc, (uint8_t)(crc >> 8),
+                         (uint8_t)(crc >> 16), (uint8_t)(crc >> 24)};
+      send_raw(body, sizeof(body));
+      break;
+    }
+
+    case CMD_KEY_READ: {
+      // [cat][idx][off] -> [OK][readable_total][off][data<=59]
+      if (plen < 3) { send1(ST_ERROR); break; }
+      uint8_t body[3 + 59];
+      uint8_t readable = 0;
+      size_t n = imk_ks_read(payload[0], payload[1], payload[2], body + 3, 59, &readable);
+      if (n == 0) { send1(ST_ERROR); break; }
+      body[0] = ST_OK;
+      body[1] = readable;
+      body[2] = payload[2];
+      send_raw(body, 3 + n);
+      break;
+    }
+
+    case CMD_KEY_WRITE: {
+      // [cat][idx][off][data...] — chunks accumulate in the staging buffer.
+      if (plen < 4) { send1(ST_ERROR); break; }
+      bool ok = imk_ks_stage(payload[0], payload[2], payload + 3, plen - 3);
+      send1(ok ? ST_OK : ST_ERROR);
+      break;
+    }
+
+    case CMD_KEY_COMMIT:
+    case CMD_KEY_DELETE: {
+      if (plen < 2) { send1(ST_ERROR); break; }
+      s_keyop = (keyop_t){.op = cmd, .cat = payload[0], .idx = payload[1]};
+      if (gate_needed()) {
+        gate_arm(GATE_KEYOP, 0);
+        send1(ST_WAIT_FP);
+        ESP_LOGI(TAG, "keyop 0x%02x cat %u idx %u: gate", cmd, payload[0], payload[1]);
+      } else {
+        keyop_execute();
+      }
+      break;
+    }
+
+    case CMD_KEY_SIGN: {
+      // [cat][idx][hash_off][hash:32]
+      if (plen < 35) { send1(ST_ERROR); break; }
+      s_keyop = (keyop_t){.op = cmd, .cat = payload[0], .idx = payload[1]};
+      memcpy(s_keyop.hash, payload + 3, 32);
+      if (gate_needed()) {
+        gate_arm(GATE_KEYOP, 0);
+        send1(ST_WAIT_FP);
+        ESP_LOGI(TAG, "KEY_SIGN idx %u: gate", payload[1]);
+      } else {
+        keyop_execute();
+      }
+      break;
+    }
+
+    case CMD_KEY_GET_PUB: {
+      if (plen < 2 || !imk_ks_get_pub(payload[1])) { send1(ST_ERROR); break; }
+      uint8_t r[2] = {ST_OK, 64};
+      send_raw(r, 2);
+      break;
+    }
+
+    case CMD_KEY_GENERATE: {
+      // [cat][name:16] — name rides in s_keyop.hash
+      if (plen < 17) { send1(ST_ERROR); break; }
+      s_keyop = (keyop_t){.op = cmd, .cat = payload[0]};
+      memcpy(s_keyop.hash, payload + 1, 16);
+      if (gate_needed()) {
+        gate_arm(GATE_KEYOP, 0);
+        send1(ST_WAIT_FP);
+        ESP_LOGI(TAG, "KEY_GENERATE: gate");
+      } else {
+        keyop_execute();
+      }
+      break;
+    }
+
+    case CMD_KEY_RESULT: {
+      // [off] -> [OK][total][off][data<=59]
+      uint8_t off = (plen >= 1) ? payload[0] : 0;
+      uint8_t body[3 + 59];
+      uint8_t total = 0;
+      size_t n = imk_ks_result_read(off, body + 3, 59, &total);
+      if (n == 0) { send1(ST_ERROR); break; }
+      body[0] = ST_OK;
+      body[1] = total;
+      body[2] = off;
+      send_raw(body, 3 + n);
+      break;
+    }
+
+    case CMD_KEY_OTP_GET: {
+      // [idx][ts:4LE]
+      if (plen < 5) { send1(ST_ERROR); break; }
+      s_keyop = (keyop_t){.op = cmd, .idx = payload[0]};
+      s_keyop.ts = (uint32_t)payload[1] | ((uint32_t)payload[2] << 8) |
+                   ((uint32_t)payload[3] << 16) | ((uint32_t)payload[4] << 24);
+      if (gate_needed()) {
+        gate_arm(GATE_KEYOP, 0);
+        send1(ST_WAIT_FP);
+        ESP_LOGI(TAG, "KEY_OTP_GET idx %u: gate", payload[0]);
+      } else {
+        keyop_execute();
+      }
+      break;
+    }
+
     case CMD_FP_MATCH_ACK: {
       send1(ST_OK);
       break;
@@ -328,6 +511,12 @@ void imk_proto_gate_on_touch(bool matched, uint16_t page_id) {
       send1(ST_OK);                      // gated ENROLL_START result: started
       s_enroll_slot = s_gate_page;
       s_enroll_requested = true;         // main loop runs the capture
+      break;
+    case GATE_KEYOP:
+      ESP_LOGI(TAG, "gate passed: keyop 0x%02x", s_keyop.op);
+      send1(ST_GATE_OK);
+      vTaskDelay(pdMS_TO_TICKS(150));
+      keyop_execute();
       break;
     case GATE_DELETE: {
       send1(ST_GATE_OK);
