@@ -83,9 +83,19 @@ void app_main(void) {
         imk_proto_on_fingerprint(0);
       } else {
         uint16_t page = 0, score = 0;
-        bool matched = fingerprint_search(&page, &score);
-        if (matched) ESP_LOGI(TAG, "MATCH slot=%u score=%u", page, score);
-        else ESP_LOGW(TAG, "no match");
+        bool matched = false;
+        // The first frame of a touch is often poor (cold sensor, light touch);
+        // retry while the finger is still down before calling it a miss.
+        for (int attempt = 0; attempt < 3 && !matched; attempt++) {
+          matched = fingerprint_search(&page, &score);
+          if (!matched && !fingerprint_present()) break;
+        }
+        if (matched) {
+          ESP_LOGI(TAG, "MATCH slot=%u score=%u", page, score);
+        } else {
+          ESP_LOGW(TAG, "no match");
+          fingerprint_led(0x04, true);  // steady red: final verdict
+        }
         if (imk_proto_gate_active()) {
           // A gate is waiting on this verification — resolve it locally.
           imk_proto_gate_on_touch(matched, page);

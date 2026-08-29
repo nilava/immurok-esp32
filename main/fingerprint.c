@@ -245,7 +245,6 @@ static bool capture_to_buffer(uint8_t buffer, uint32_t wait_ms) {
 bool fingerprint_search(uint16_t *page_id, uint16_t *score) {
   if (!capture_to_buffer(1, 800)) {
     ESP_LOGW(TAG, "search: capture failed");
-    fingerprint_led(0x04, true);
     return false;
   }
 
@@ -295,8 +294,7 @@ bool fingerprint_search(uint16_t *page_id, uint16_t *score) {
     }
   }
 
-  fingerprint_led(0x04, true);  // steady red: no match
-  return false;
+  return false;  // caller paints the no-match verdict (it may retry first)
 }
 
 bool fingerprint_enroll(uint16_t slot, void (*prompt)(const char *msg)) {
