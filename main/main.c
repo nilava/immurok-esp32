@@ -103,8 +103,20 @@ void app_main(void) {
           imk_proto_on_fingerprint(page);
         }
       }
-      while (fingerprint_present()) vTaskDelay(pdMS_TO_TICKS(50));
-      // Let the green/red result linger a beat, then return to idle breathing.
+      // Hold >=2s = lock request (reference behavior: fires regardless of the
+      // match outcome; the app ignores it when the screen is already locked).
+      TickType_t hold_start = xTaskGetTickCount();
+      bool lock_sent = false;
+      while (fingerprint_present()) {
+        if (!lock_sent &&
+            (xTaskGetTickCount() - hold_start) > pdMS_TO_TICKS(2000)) {
+          imk_proto_send_lock_request();
+          fingerprint_led(0x01, true);  // steady blue: lock request sent
+          lock_sent = true;
+        }
+        vTaskDelay(pdMS_TO_TICKS(50));
+      }
+      // Let the verdict linger a beat, then return to idle.
       vTaskDelay(pdMS_TO_TICKS(350));
       fingerprint_led_idle();
     }

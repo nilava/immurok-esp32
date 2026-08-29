@@ -36,5 +36,8 @@ void imk_proto_gate_tick(void);
 bool imk_proto_enroll_requested(void);
 void imk_proto_run_enrollment(void);
 
+// Long-press: send the [0x23] lock-screen request notification.
+void imk_proto_send_lock_request(void);
+
 // Reset transient state on BLE disconnect.
 void imk_proto_on_disconnect(void);

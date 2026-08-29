@@ -52,6 +52,7 @@ static const char *TAG = "imk_proto";
 
 // Notification tags.
 #define NOTIF_FP_MATCH 0x21
+#define NOTIF_LOCK_REQ 0x23  // long-press: ask the host to lock its screen
 
 static imk_send_fn s_send;
 static bool s_pairing_pending;  // PAIR_INIT received, waiting for a touch
@@ -463,6 +464,13 @@ void imk_proto_run_enrollment(void) {
   bool ok = fingerprint_enroll_stream(s_enroll_slot, enroll_progress);
   ESP_LOGI(TAG, "enroll %s; count=%d bitmap=0x%02x",
            ok ? "ok" : "FAIL", fingerprint_count(), fingerprint_index_bitmap());
+}
+
+// Long-press (>=2s hold) lock-screen request. The app fires it regardless of
+// match outcome and gates on screen state itself.
+void imk_proto_send_lock_request(void) {
+  send1(NOTIF_LOCK_REQ);
+  ESP_LOGI(TAG, "sent lock request (long press)");
 }
 
 bool imk_proto_gate_active(void) { return s_gate != GATE_NONE; }
