@@ -107,7 +107,9 @@ void app_main(void) {
         // longer paints, so this doesn't flicker between attempts. Skip it
         // when a gate is already breathing its own color (cyan "verify to
         // proceed") — forcing purple over that would clash mid-breath.
-        if (!imk_proto_gate_active()) fingerprint_led_state(FP_LED_READING);
+        bool showed_reading = !imk_proto_gate_active();
+        if (showed_reading) fingerprint_led_state(FP_LED_READING);
+        TickType_t reading_start = xTaskGetTickCount();
         // Single capture per touch — matches tinytouch's proven, complaint-
         // free behavior on this exact sensor. A 3x cold-start retry looked
         // good on paper but each capture attempt visibly blips the ring
@@ -116,6 +118,15 @@ void app_main(void) {
         // as an ugly triple-flicker on every ordinary wrong-finger touch.
         // Trade: rare cold-boot misses need a second tap, same as always.
         matched = fingerprint_search(&page, &score);
+        if (showed_reading) {
+          // A fast capture (well under a breathing cycle) painting straight
+          // over "reading" reads as a flash, not a transition — give it a
+          // minimum visible stretch before the verdict replaces it.
+          TickType_t elapsed = xTaskGetTickCount() - reading_start;
+          if (elapsed < pdMS_TO_TICKS(350)) {
+            vTaskDelay(pdMS_TO_TICKS(350) - elapsed);
+          }
+        }
         if (matched) {
           ESP_LOGI(TAG, "MATCH slot=%u score=%u", page, score);
         } else {
