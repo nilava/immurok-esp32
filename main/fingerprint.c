@@ -222,12 +222,15 @@ void fingerprint_led_state(fp_led_state_t s) {
     case FP_LED_IDLE:         aura(AURA_ON, 0, C_PURPLE, 0); break;
     case FP_LED_UNREACHABLE:  aura(AURA_ON, 0, C_PINK, 0); break;   // no yellow on this ring
     case FP_LED_READING:      aura(AURA_ON, 0, C_CYAN, 0); break;   // no white on this ring
-    case FP_LED_MATCH:        aura(AURA_FLASH, 25, C_GREEN, 2); break;
-    case FP_LED_NOMATCH:      aura(AURA_FLASH, 25, C_RED, 2); break;
+    // No flash mode: on this ring a flash sequence swallows any command sent
+    // while it runs and then HOLDS its color, orphaning the idle repaint.
+    // Verdicts are steady holds; the callers time the return to idle.
+    case FP_LED_MATCH:        aura(AURA_ON, 0, C_GREEN, 0); break;
+    case FP_LED_NOMATCH:      aura(AURA_ON, 0, C_RED, 0); break;
     case FP_LED_ENROLL_PLACE: aura(AURA_BREATHE, 100, C_BLUE, 0); break;
     case FP_LED_ENROLL_LIFT:  aura(AURA_ON, 0, C_CYAN, 0); break;
-    case FP_LED_ENROLL_OK:    aura(AURA_FLASH, 25, C_GREEN, 3); break;
-    case FP_LED_ENROLL_FAIL:  aura(AURA_FLASH, 25, C_RED, 3); break;
+    case FP_LED_ENROLL_OK:    aura(AURA_ON, 0, C_GREEN, 0); break;
+    case FP_LED_ENROLL_FAIL:  aura(AURA_ON, 0, C_RED, 0); break;
     case FP_LED_PAIRING:      aura(AURA_BREATHE, 60, C_PURPLE, 0); break;
     case FP_LED_SWITCHING:    aura(AURA_ON, 0, C_BLUE, 0); break;
   }

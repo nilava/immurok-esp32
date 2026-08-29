@@ -134,8 +134,8 @@ void app_main(void) {
         }
         vTaskDelay(pdMS_TO_TICKS(50));
       }
-      // Let the verdict linger a beat, then return to idle.
-      vTaskDelay(pdMS_TO_TICKS(350));
+      // Let the verdict linger a beat, then ease back to idle.
+      vTaskDelay(pdMS_TO_TICKS(700));
       fingerprint_led_idle();
     }
     vTaskDelay(pdMS_TO_TICKS(80));
