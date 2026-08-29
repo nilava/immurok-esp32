@@ -99,6 +99,7 @@ static void gate_arm(gate_t g, uint16_t page) {
   s_gate_page = page;
   s_gate_attempts = 0;
   s_gate_start = xTaskGetTickCount();
+  fingerprint_led_state(FP_LED_AUTH_WAIT);  // breathing: verify to proceed
 }
 
 

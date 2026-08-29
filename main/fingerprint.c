@@ -230,8 +230,8 @@ void fingerprint_led_set_connected(bool connected) {
 void fingerprint_led_state(fp_led_state_t s) {
   switch (s) {
     case FP_LED_IDLE:         aura(AURA_ON, C_PURPLE, C_PURPLE, 0); break;
-    case FP_LED_UNREACHABLE:  aura(AURA_ON, C_YELLOW, C_YELLOW, 0); break;
-    case FP_LED_READING:      aura(AURA_ON, C_WHITE, C_WHITE, 0); break;
+    case FP_LED_UNREACHABLE:  aura(AURA_BREATHE, C_OFF, C_RED, 0); break;
+    case FP_LED_READING:      aura(AURA_BREATHE, C_OFF, C_WHITE, 0); break;
     // No flash function: earlier attempts showed this ring's flash sequence
     // swallows commands sent while it runs and then holds its color,
     // orphaning the idle repaint. Verdicts are steady holds instead; the
@@ -244,6 +244,7 @@ void fingerprint_led_state(fp_led_state_t s) {
     case FP_LED_ENROLL_FAIL:  aura(AURA_ON, C_RED, C_RED, 0); break;
     case FP_LED_PAIRING:      aura(AURA_BREATHE, C_OFF, C_PURPLE, 0); break;
     case FP_LED_SWITCHING:    aura(AURA_ON, C_BLUE, C_BLUE, 0); break;
+    case FP_LED_AUTH_WAIT:    aura(AURA_BREATHE, C_OFF, C_CYAN, 0); break;
   }
 }
 

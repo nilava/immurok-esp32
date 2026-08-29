@@ -50,6 +50,7 @@ typedef enum {
   FP_LED_ENROLL_FAIL,
   FP_LED_PAIRING,
   FP_LED_SWITCHING,
+  FP_LED_AUTH_WAIT,  // breathing: verify an enrolled finger to proceed (any gate)
 } fp_led_state_t;
 
 void fingerprint_led_state(fp_led_state_t s);
