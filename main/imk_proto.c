@@ -216,13 +216,13 @@ void imk_proto_handle(const uint8_t *pkt, size_t len) {
         s_pairing_pending = true;
         send2(CMD_PAIR_INIT, ST_WAIT_BUTTON);
         ESP_LOGI(TAG, "PAIR_INIT: second host — verify enrolled finger first");
-        fingerprint_led(0x03, false);
+        fingerprint_led_state(FP_LED_PAIRING);
       } else {
         s_pair_stage = PAIR_WAIT_PRESENCE;
         s_pairing_pending = true;
         send2(CMD_PAIR_INIT, ST_WAIT_BUTTON);  // waiting for the presence gate (a touch)
         ESP_LOGI(TAG, "PAIR_INIT: waiting for fingerprint touch to confirm");
-        fingerprint_led(0x03, false);  // purple flash: awaiting confirm
+        fingerprint_led_state(FP_LED_PAIRING);  // purple breathing
       }
       break;
     }
@@ -595,7 +595,7 @@ void imk_proto_on_pairing_touch(bool matched) {
       s_pair_stage = PAIR_WAIT_CONFIRM;
       send2(0x34, 0x03);  // PAIR_BUTTON 0x03: fingerprint passed, confirm next
       ESP_LOGI(TAG, "pairing: enrolled finger verified; touch again to confirm");
-      fingerprint_led(0x03, false);
+      fingerprint_led_state(FP_LED_PAIRING);
       return;
     case PAIR_WAIT_PRESENCE:
     case PAIR_WAIT_CONFIRM: {
@@ -624,10 +624,10 @@ static void handle_switch_finger(void) {
   uint8_t addr[6], atype = 0;
   if (!imk_crypto_slot_addr(target, addr, &atype)) {
     ESP_LOGW(TAG, "switch finger: no other host bound");
-    fingerprint_led(0x04, true);
+    fingerprint_led_state(FP_LED_NOMATCH);
     return;
   }
-  fingerprint_led(0x01, true);  // steady blue: switching
+  fingerprint_led_state(FP_LED_SWITCHING);  // steady blue
   imk_service_switch_host(addr, atype);
 }
 

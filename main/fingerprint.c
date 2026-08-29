@@ -174,33 +174,87 @@ void fingerprint_init(void) {
   int n = fingerprint_count();
   ESP_LOGI(TAG, "sensor init: %d template(s) enrolled, index bitmap=0x%02x",
            n, fingerprint_index_bitmap());
-  fingerprint_led_idle();  // calm purple breathing
+  fingerprint_led_idle();
 }
 
 bool fingerprint_present(void) {
   return gpio_get_level(FP_INT_PIN) == FP_INT_ACTIVE;
 }
 
+// Aura params (verified on this sensor family by dashtouch's fp_colors
+// diagnostic): [mode][speed][color][count]. Modes: 1=breathe 2=flash
+// 3=steady-on 4=off. Speed: ~0 fast … 255 slow (100 = calm multi-second
+// fade). Colors are an INDEX, not a mask: 1=red 2=blue 3=purple 4=green
+// 5=yellow 6=cyan 7=white.
+#define AURA_BREATHE 1
+#define AURA_FLASH   2
+#define AURA_ON      3
+#define AURA_OFF     4
+
+#define C_RED    1
+#define C_BLUE   2
+#define C_PURPLE 3
+#define C_GREEN  4
+#define C_YELLOW 5
+#define C_CYAN   6
+#define C_WHITE  7
+
+static void aura(uint8_t mode, uint8_t speed, uint8_t color, uint8_t count) {
+  uint8_t params[] = {mode, speed, color, count};
+  uint8_t confirm = 0xff;
+  fp_command(CMD_AURA_LED, params, sizeof(params), &confirm, NULL, NULL, 1000);
+}
+
+// Whether a host is connected steers what "idle" looks like (purple = ready,
+// yellow = can't reach a computer). Set from the BLE layer.
+static bool s_host_connected;
+void fingerprint_led_set_connected(bool connected) {
+  s_host_connected = connected;
+  fingerprint_led_idle();
+}
+
+void fingerprint_led_state(fp_led_state_t s) {
+  switch (s) {
+    case FP_LED_IDLE:         aura(AURA_ON, 0, C_PURPLE, 0); break;
+    case FP_LED_UNREACHABLE:  aura(AURA_ON, 0, C_YELLOW, 0); break;
+    case FP_LED_READING:      aura(AURA_ON, 0, C_WHITE, 0); break;
+    case FP_LED_MATCH:        aura(AURA_FLASH, 25, C_GREEN, 2); break;
+    case FP_LED_NOMATCH:      aura(AURA_FLASH, 25, C_RED, 2); break;
+    case FP_LED_ENROLL_PLACE: aura(AURA_BREATHE, 100, C_WHITE, 0); break;
+    case FP_LED_ENROLL_LIFT:  aura(AURA_ON, 0, C_CYAN, 0); break;
+    case FP_LED_ENROLL_OK:    aura(AURA_FLASH, 25, C_GREEN, 3); break;
+    case FP_LED_ENROLL_FAIL:  aura(AURA_FLASH, 25, C_RED, 3); break;
+    case FP_LED_PAIRING:      aura(AURA_BREATHE, 60, C_PURPLE, 0); break;
+    case FP_LED_SWITCHING:    aura(AURA_ON, 0, C_BLUE, 0); break;
+  }
+}
+
+// Compatibility shims for older call sites: legacy bitmask colors map onto
+// the nearest semantic state.
 void fingerprint_led(uint8_t color, bool steady) {
-  // Aura params: [function][start color][end color][cycles] — the 2nd byte is a
-  // COLOR, not a speed (a stray value there lights its bit-pattern color).
-  // fn 3 = steady, 2 = flash.
-  uint8_t params[] = {(uint8_t)(steady ? 3 : 2), color, color, (uint8_t)(steady ? 0 : 2)};
-  uint8_t confirm = 0xff;
-  fp_command(CMD_AURA_LED, params, sizeof(params), &confirm, NULL, NULL, 1000);
+  if (color == 0x02) fingerprint_led_state(steady ? FP_LED_MATCH : FP_LED_MATCH);
+  else if (color == 0x04) fingerprint_led_state(FP_LED_NOMATCH);
+  else if (color == 0x01) fingerprint_led_state(FP_LED_SWITCHING);
+  else fingerprint_led_state(FP_LED_PAIRING);
 }
 
-// Continuous gentle breathing — used for idle (purple) and "waiting to enroll"
-// (blue). fn 1 = breathing, cycles 0 = run until the next aura command.
-void fingerprint_led_breathe(uint8_t color) {
-  uint8_t params[] = {1, color, color, 0};
-  uint8_t confirm = 0xff;
-  fp_command(CMD_AURA_LED, params, sizeof(params), &confirm, NULL, NULL, 1000);
+void fingerprint_led_breathe(uint8_t color) { (void)color; fingerprint_led_state(FP_LED_ENROLL_PLACE); }
+
+void fingerprint_led_idle(void) {
+  fingerprint_led_state(s_host_connected ? FP_LED_IDLE : FP_LED_UNREACHABLE);
 }
 
-// Breathing on this ZW101 runs at a fixed, frantic pace and washes purple out
-// to blue — steady is the calm, proven mode, so idle holds steady purple.
-void fingerprint_led_idle(void) { fingerprint_led(0x03, true); }
+// Console diagnostic: sweep the seven indexed colors, 2s each, then idle.
+void fingerprint_led_sweep(void) {
+  static const char *NAMES[] = {"?", "1=red", "2=blue", "3=purple", "4=green",
+                                "5=yellow", "6=cyan", "7=white"};
+  for (int c = 1; c <= 7; c++) {
+    ESP_LOGW(TAG, "aura color %s", NAMES[c]);
+    aura(AURA_ON, 0, (uint8_t)c, 0);
+    vTaskDelay(pdMS_TO_TICKS(2000));
+  }
+  fingerprint_led_idle();
+}
 
 int fingerprint_count(void) {
   for (int attempt = 0; attempt < 3; attempt++) {
@@ -243,6 +297,7 @@ static bool capture_to_buffer(uint8_t buffer, uint32_t wait_ms) {
 }
 
 bool fingerprint_search(uint16_t *page_id, uint16_t *score) {
+  fingerprint_led_state(FP_LED_READING);  // steady white while capturing
   if (!capture_to_buffer(1, 800)) {
     ESP_LOGW(TAG, "search: capture failed");
     return false;
@@ -265,7 +320,7 @@ bool fingerprint_search(uint16_t *page_id, uint16_t *score) {
     if (s >= MATCH_MIN_SCORE) {
       if (page_id) *page_id = ((uint16_t)data[0] << 8) | data[1];
       if (score) *score = s;
-      fingerprint_led(0x02, true);  // steady green: matched
+      fingerprint_led_state(FP_LED_MATCH);
       return true;
     }
   }
@@ -325,7 +380,7 @@ bool fingerprint_enroll_stream(uint16_t slot,
 
   for (uint8_t i = 1; i <= TOTAL; i++) {
     if (progress) progress(0x00, i - 1, TOTAL);  // waiting for finger
-    fingerprint_led(0x01, true);  // steady blue: waiting for a finger
+    fingerprint_led_state(FP_LED_ENROLL_PLACE);  // breathing white
     ESP_LOGI(TAG, "enroll: waiting for finger %u/%u", i, TOTAL);
     // Wait for a finger to be present, then capture into buffer i. Re-send the
     // "waiting" frame every ~3s — the app uses it as an enrollment keep-alive.
@@ -335,6 +390,7 @@ bool fingerprint_enroll_stream(uint16_t slot,
       if ((xTaskGetTickCount() - start) > pdMS_TO_TICKS(15000)) {
         ESP_LOGW(TAG, "enroll: timed out waiting for finger");
         if (progress) progress(0xFF, i - 1, TOTAL);
+        fingerprint_led_state(FP_LED_ENROLL_FAIL);
         return false;
       }
       if ((xTaskGetTickCount() - last_ka) > pdMS_TO_TICKS(3000)) {
@@ -352,6 +408,7 @@ bool fingerprint_enroll_stream(uint16_t slot,
     if (progress) progress(0x01, i, TOTAL);  // captured
     if (i < TOTAL) {
       if (progress) progress(0x03, i, TOTAL);  // lift finger
+      fingerprint_led_state(FP_LED_ENROLL_LIFT);  // steady cyan
       while (fingerprint_present()) vTaskDelay(pdMS_TO_TICKS(50));
     }
   }
@@ -395,7 +452,7 @@ bool fingerprint_enroll_stream(uint16_t slot,
     }
   }
   if (progress) progress(0x04, TOTAL, TOTAL);  // complete
-  fingerprint_led(0x02, true);  // steady green: enrolled
+  fingerprint_led_state(FP_LED_ENROLL_OK);
   fingerprint_count();  // refresh cached_count
   return true;
 }

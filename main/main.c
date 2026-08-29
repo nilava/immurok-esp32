@@ -32,6 +32,9 @@ static void console_task(void *arg) {
       ESP_LOGW(TAG, "restarting…");
       vTaskDelay(pdMS_TO_TICKS(80));
       esp_restart();
+    } else if (c == 'c' || c == 'C') {
+      ESP_LOGW(TAG, "LED color sweep: watch the ring, compare with the logged names");
+      fingerprint_led_sweep();
     } else if (c == 'p' || c == 'P') {
       imk_crypto_dump_slots();
     } else if (c == 'u' || c == 'U') {
@@ -71,7 +74,7 @@ void app_main(void) {
   imk_keystore_init();
   imk_proto_init(imk_service_respond);
   imk_service_start();
-  ESP_LOGI(TAG, "immurok-esp32 boot; console: d=download r=restart w=wipe-fp i=info p=slots u=unbind-hosts");
+  ESP_LOGI(TAG, "immurok-esp32 boot; console: d=download r=restart w=wipe-fp i=info p=slots u=unbind-hosts c=led-sweep");
   (void)prompt;
 
   // On a fingerprint touch: during pairing it drives the ECDH pubkey exchange;
@@ -90,7 +93,7 @@ void app_main(void) {
           // Second-host pairing: this touch must MATCH an enrolled finger.
           uint16_t page = 0, score = 0;
           bool m = fingerprint_search(&page, &score);
-          if (!m) fingerprint_led(0x04, true);
+          if (!m) fingerprint_led_state(FP_LED_NOMATCH);
           imk_proto_on_pairing_touch(m);
         } else {
           // Presence stages: any live finger confirms.
@@ -109,7 +112,7 @@ void app_main(void) {
           ESP_LOGI(TAG, "MATCH slot=%u score=%u", page, score);
         } else {
           ESP_LOGW(TAG, "no match");
-          fingerprint_led(0x04, true);  // steady red: final verdict
+          fingerprint_led_state(FP_LED_NOMATCH);
         }
         if (imk_proto_gate_active()) {
           // A gate is waiting on this verification — resolve it locally.
@@ -126,7 +129,7 @@ void app_main(void) {
         if (!lock_sent &&
             (xTaskGetTickCount() - hold_start) > pdMS_TO_TICKS(2000)) {
           imk_proto_send_lock_request();
-          fingerprint_led(0x01, true);  // steady blue: lock request sent
+          fingerprint_led_state(FP_LED_SWITCHING);  // steady blue: lock sent
           lock_sent = true;
         }
         vTaskDelay(pdMS_TO_TICKS(50));

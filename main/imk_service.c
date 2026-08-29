@@ -12,6 +12,7 @@
 
 #include "imk_proto.h"
 #include "imk_crypto.h"
+#include "fingerprint.h"
 
 static const char *TAG = "imk_service";
 
@@ -294,6 +295,7 @@ static void gatts_handler(esp_gatts_cb_event_t event, esp_gatt_if_t gatts_if,
       memcpy(s_peer_bda, param->connect.remote_bda, sizeof(s_peer_bda));
       imk_crypto_select_host(s_peer_bda);
       esp_timer_start_once(s_conn_param_timer, 30 * 1000 * 1000);
+      fingerprint_led_set_connected(true);
       ESP_LOGI(TAG, "host connected");
       break;
     }
@@ -302,6 +304,7 @@ static void gatts_handler(esp_gatts_cb_event_t event, esp_gatt_if_t gatts_if,
       s_notify_enabled = false;
       esp_timer_stop(s_conn_param_timer);
       imk_proto_on_disconnect();
+      fingerprint_led_set_connected(false);
       adv_params.adv_filter_policy = s_switch_pending
           ? ADV_FILTER_ALLOW_SCAN_ANY_CON_WLST
           : ADV_FILTER_ALLOW_SCAN_ANY_CON_ANY;

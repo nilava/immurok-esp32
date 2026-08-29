@@ -34,11 +34,29 @@ int fingerprint_cached_count(void);  // last known count, no UART access
 uint8_t fingerprint_index_bitmap(void);  // bit i set = slot i enrolled (slots 0..7)
 const char *fingerprint_slot_probe(void);  // "01..3..." map of loadable slots 0..7
 
-// Ring LED (aura). color is a 3-bit mask: blue 0x01, green 0x02, red 0x04
-// (purple 0x03, white 0x07). steady=true holds; steady=false = one clean blink.
-void fingerprint_led(uint8_t color, bool steady);
+// Ring LED language (mirrors the states the app documents):
+//   purple ready · yellow can't-reach-host · white reading · green matched ·
+//   red no-match/error · white-breathe place finger · cyan lift finger ·
+//   blue switching hosts · purple-breathe pairing.
+typedef enum {
+  FP_LED_IDLE,
+  FP_LED_UNREACHABLE,
+  FP_LED_READING,
+  FP_LED_MATCH,
+  FP_LED_NOMATCH,
+  FP_LED_ENROLL_PLACE,
+  FP_LED_ENROLL_LIFT,
+  FP_LED_ENROLL_OK,
+  FP_LED_ENROLL_FAIL,
+  FP_LED_PAIRING,
+  FP_LED_SWITCHING,
+} fp_led_state_t;
 
-// Continuous gentle breathing in `color` until the next aura command.
+void fingerprint_led_state(fp_led_state_t s);
+void fingerprint_led_set_connected(bool connected);  // steers idle color
+void fingerprint_led_idle(void);   // purple when connected, yellow when not
+void fingerprint_led_sweep(void);  // diagnostic: cycle the 7 colors, 2s each
+
+// Legacy shims (old bitmask call sites map to nearest state).
+void fingerprint_led(uint8_t color, bool steady);
 void fingerprint_led_breathe(uint8_t color);
-// Calm purple breathing — the resting/idle animation.
-void fingerprint_led_idle(void);
