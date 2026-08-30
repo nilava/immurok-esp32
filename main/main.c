@@ -88,6 +88,11 @@ void app_main(void) {
     }
     imk_proto_gate_tick();  // expire a stale fingerprint gate (25s)
     if (fingerprint_present()) {
+      // Stamp when the finger actually landed. The long-press window has to
+      // be measured from here, not from after the match: the search alone
+      // eats 0.6-1s (plus a settle, plus 700ms on a no-match), so a timer
+      // started later meant a real 2s hold never reached the threshold.
+      TickType_t touch_start = xTaskGetTickCount();
       if (imk_proto_pairing_pending()) {
         if (imk_proto_pairing_needs_match()) {
           // Second-host pairing: this touch must MATCH an enrolled finger.
@@ -147,17 +152,19 @@ void app_main(void) {
       }
       // Hold >=2s = lock request (reference behavior: fires regardless of the
       // match outcome; the app ignores it when the screen is already locked).
-      TickType_t hold_start = xTaskGetTickCount();
       bool lock_sent = false;
       while (fingerprint_present()) {
         if (!lock_sent &&
-            (xTaskGetTickCount() - hold_start) > pdMS_TO_TICKS(2000)) {
+            (xTaskGetTickCount() - touch_start) > pdMS_TO_TICKS(2000)) {
           imk_proto_send_lock_request();
           fingerprint_led_state(FP_LED_LOCK_SENT);  // steady blue: lock sent
           lock_sent = true;
         }
         vTaskDelay(pdMS_TO_TICKS(50));
       }
+      ESP_LOGI(TAG, "touch released after %lu ms (lock %s)",
+               (unsigned long)((xTaskGetTickCount() - touch_start) * portTICK_PERIOD_MS),
+               lock_sent ? "SENT" : "not sent");
       // Wait out the module's own post-match indicator before repainting, so
       // idle doesn't collide with it. No-op if this touch didn't match.
       fingerprint_led_settle();
