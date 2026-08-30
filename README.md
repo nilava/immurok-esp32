@@ -344,8 +344,12 @@ What it *was* built from:
   reimplemented here in C; no Swift was copied.
 - **immurok's protocol documentation** — note that the repository carrying it is under the
   Business Source License 1.1. This project's position is that implementing a wire
-  protocol for interoperability is not a derivative of the licensed work. That is a
-  good-faith reading, not legal advice.
+  protocol for interoperability is not a derivative of the licensed work.
+
+  **immurok were contacted before this repository was made public, and confirmed they are
+  happy for it to be published**, on the understanding that it is unaffiliated and not a
+  derivative of their BSL-licensed firmware. Thanks to them for the quick and generous
+  reply.
 - **[zimengxiong/tinytouch](https://github.com/zimengxiong/tinytouch)** (MIT) — the
   hardware design this build is a copy of, and the origin of the working ZW101 UART
   command sequences. The printed case in [`hardware/case/`](hardware/case/) is
@@ -358,8 +362,8 @@ What it *was* built from:
 - **[Gadgetbridge](https://gadgetbridge.org/internals/specifics/ultrahuman-protocol/)** —
   the Ultrahuman BLE naming convention, used only by the optional scan diagnostic.
 
-If you are from immurok and would like anything changed about the framing, attribution, or
-this project's existence, please open an issue — that request will be honoured.
+If immurok would like anything changed about the framing, attribution, or this project's
+existence at any point, please open an issue — that request will be honoured.
 
 **This project's own code is released under the MIT License** (see `LICENSE`).
 
