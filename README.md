@@ -20,11 +20,27 @@ Touch the sensor to unlock your Mac or Windows PC. Hold for two seconds to lock 
 binds to two computers at once and hops between them on a dedicated fingerprint, and it
 carries an on-device SSH key vault and TOTP vault that sign only after a fingerprint.
 
-> **Not affiliated with immurok.** This is a third-party reimplementation for different
-> hardware, written against immurok's published protocol notes and the observable
-> behaviour of their Apache-2.0 macOS app. No immurok firmware code is used — see
-> [Licensing and provenance](#licensing-and-provenance). Bugs here are mine, not theirs;
-> please don't file them upstream.
+> ### ⚠️ Unaffiliated third-party project
+>
+> **This project is not affiliated with, endorsed by, supported by, or produced by
+> immurok.** It is an independent reimplementation by an unrelated person, for different
+> hardware than immurok sells.
+>
+> - immurok did not write this firmware and **cannot support it**. If something here
+>   breaks, **it is my bug, not theirs** — open an issue on *this* repository. Please do
+>   not file issues, feature requests or support questions on immurok's repositories, and
+>   please do not contact them about this project.
+> - **Buying immurok's hardware is not the same as using this**, and using this is not a
+>   substitute for their product. If you want the polished, supported experience, buy
+>   their device.
+> - The name "immurok" is used here only to state *what protocol this speaks*, which is a
+>   factual description of compatibility — not a claim of origin, endorsement or
+>   partnership.
+> - **No immurok firmware code is used.** Their firmware is BSL-licensed and targets
+>   entirely different silicon. See [Licensing and provenance](#licensing-and-provenance).
+>
+> immurok were asked before this was published and were happy for it to exist. That is a
+> courtesy they extended, not an endorsement of the code.
 
 ---
 
@@ -207,12 +223,32 @@ slot — this firmware updates over USB. The NVS offset is deliberately kept sta
 versions, so reflashing preserves your pairing keys, enrolled fingerprints and vault
 contents. `idf.py erase-flash` wipes all of that and puts you back to unpaired.
 
+## Companion apps
+
+This firmware is only half of the system. The host-side software is **immurok's**, and it
+does the genuinely hard part — the PAM module, the Windows credential provider, the SSH
+agent, the secret vault. Get it from them, not from me:
+
+| Platform | Repository | Tested with this firmware? |
+|---|---|---|
+| macOS | [immurok/app-macos](https://github.com/immurok/app-macos) | **Yes** — this is what everything was developed against |
+| Windows | [immurok/app-win](https://github.com/immurok/app-win) | Not tested. Same protocol, so expected to work — treat that as an expectation, not a result |
+| Linux | [immurok/app-linux-rs](https://github.com/immurok/app-linux-rs) | Not tested. (Note: `app-linux` is archived; `app-linux-rs` is the current one) |
+| AI agent skill | [immurok/imk-skill](https://github.com/immurok/imk-skill) | Not tested |
+
+Their main project, docs and hardware:
+[immurok/immurok](https://github.com/immurok/immurok) ·
+[immurok/hardware](https://github.com/immurok/hardware) ·
+[immurok/firmware](https://github.com/immurok/firmware) ·
+[immurok.com](https://immurok.com)
+
+Again: **support questions about those apps go to immurok; support questions about this
+firmware come to me.** Please keep the two separate — it is unfair to land my bugs in
+their inbox.
+
 ## Setup
 
-1. Install immurok's companion app for your OS ([macOS](https://github.com/immurok/app-macos),
-   [Windows](https://github.com/immurok/app-win), [Linux](https://github.com/immurok/app-linux-rs)).
-   Windows and Linux are untested here — the protocol is shared, so they are expected to
-   work, but treat that as a claim not a result.
+1. Install immurok's companion app for your OS from the table above.
 2. Flash the firmware and power the device.
 3. In the app, **Pair**. The device advertises as `immurok-tt`. It will ask for a touch to
    confirm physical presence (immurok's reference hardware uses a button; this build uses
