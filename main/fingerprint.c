@@ -223,6 +223,7 @@ bool fingerprint_present(void) {
 static void aura(uint8_t function, uint8_t p1, uint8_t p2, uint8_t count) {
   uint8_t params[] = {function, p1, p2, count};
   uint8_t confirm = 0xff;
+  ESP_LOGI(TAG, "AURA fn=%u p1=%u p2=%u cyc=%u", function, p1, p2, count);
   fp_command(CMD_AURA_LED, params, sizeof(params), &confirm, NULL, NULL, 1000);
 }
 
@@ -252,7 +253,14 @@ void fingerprint_led_set_connected(bool connected) {
   fingerprint_led_idle();
 }
 
+static int s_current_state = -1;
+
 void fingerprint_led_state(fp_led_state_t s) {
+  // Skip redundant repaints: re-sending an identical aura command makes this
+  // module blink, so "holding" a color by repainting it was creating the very
+  // flicker it was meant to cure. (tinytouch does the same dedupe.)
+  if ((int)s == s_current_state) return;
+  s_current_state = (int)s;
   switch (s) {
     case FP_LED_IDLE:         aura_steady(C_PURPLE); break;
     case FP_LED_UNREACHABLE:  aura_breathe(C_RED); break;
@@ -297,12 +305,8 @@ void fingerprint_led_idle(void) {
 // auto-indications land, and ours is what the user actually sees. Steady
 // states only: re-issuing a breathe command would restart its fade.
 void fingerprint_led_hold(fp_led_state_t s, uint32_t ms) {
-  const uint32_t step = 120;
   fingerprint_led_state(s);
-  for (uint32_t t = 0; t < ms; t += step) {
-    vTaskDelay(pdMS_TO_TICKS(step));
-    fingerprint_led_state(s);
-  }
+  vTaskDelay(pdMS_TO_TICKS(ms));
 }
 
 // Console diagnostic: sweep the seven indexed colors, 2s each, then idle.
