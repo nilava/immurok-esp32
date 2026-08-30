@@ -632,10 +632,11 @@ static void handle_switch_finger(void) {
   // handler's idle repaint would otherwise wipe this blue within a
   // millisecond of showing it. Hold blue long enough to actually read as
   // "switching", overriding the module's own green capture indicator.
-  // The module's own green ("recognised") runs first and is not suppressible;
-  // the breathing blue that follows is the switch window. Two deliberate
-  // stages rather than a colour we failed to hide.
+  // Let the module's unsuppressible green ("recognised") finish before
+  // painting: a blue issued mid-window collides with it and flickers. Two
+  // clean stages — green, then the breathing blue of the switch window.
   fingerprint_led_lock(true);
+  fingerprint_led_settle();
   fingerprint_led_state(FP_LED_SWITCHING);
   imk_service_switch_host(addr, atype);
 }

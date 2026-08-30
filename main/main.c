@@ -158,9 +158,9 @@ void app_main(void) {
         }
         vTaskDelay(pdMS_TO_TICKS(50));
       }
-      // Verdicts now hold themselves; just a short beat before idle.
-      // (No-op while the LED is locked, e.g. mid host-switch.)
-      vTaskDelay(pdMS_TO_TICKS(250));
+      // Wait out the module's own post-match indicator before repainting, so
+      // idle doesn't collide with it. No-op if this touch didn't match.
+      fingerprint_led_settle();
       fingerprint_led_idle();
     }
     vTaskDelay(pdMS_TO_TICKS(80));

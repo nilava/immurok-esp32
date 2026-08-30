@@ -255,6 +255,18 @@ void fingerprint_led_set_connected(bool connected) {
 
 static int s_current_state = -1;
 
+// The module runs its own ~1s green after a successful match and ignores
+// ControlBLN during it; a paint issued mid-window collides and reads as a
+// flicker. Record when that window opened so callers can let it finish.
+#define MODULE_INDICATOR_MS 1000
+static TickType_t s_match_tick;
+
+void fingerprint_led_settle(void) {
+  TickType_t elapsed = xTaskGetTickCount() - s_match_tick;
+  TickType_t window = pdMS_TO_TICKS(MODULE_INDICATOR_MS);
+  if (elapsed < window) vTaskDelay(window - elapsed);
+}
+
 void fingerprint_led_state(fp_led_state_t s) {
   // Skip redundant repaints: re-sending an identical aura command makes this
   // module blink, so "holding" a color by repainting it was creating the very
@@ -399,6 +411,7 @@ bool fingerprint_search(uint16_t *page_id, uint16_t *score) {
     if (s >= MATCH_MIN_SCORE) {
       if (page_id) *page_id = ((uint16_t)data[0] << 8) | data[1];
       if (score) *score = s;
+      s_match_tick = xTaskGetTickCount();  // module green starts now
       return true;
     }
     return false;  // searched, found, but too weak — a real verdict
@@ -427,6 +440,7 @@ bool fingerprint_search(uint16_t *page_id, uint16_t *score) {
     if (mok && confirm == 0x00 && s >= MATCH_MIN_SCORE) {
       if (page_id) *page_id = slot;
       if (score) *score = s;
+      s_match_tick = xTaskGetTickCount();  // module green starts now
       return true;
     }
   }
