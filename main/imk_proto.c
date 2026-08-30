@@ -628,10 +628,12 @@ static void handle_switch_finger(void) {
     fingerprint_led_state(FP_LED_NOMATCH);
     return;
   }
-  // Go straight to blue — no intermediate green. (An earlier deliberate
-  // green-then-blue hold here was itself the cause of a reported flash;
-  // this is not a hardware indicator, just our own prior code.)
-  fingerprint_led_state(FP_LED_SWITCHING);  // steady blue
+  // Lock first: switching deliberately disconnects, and the disconnect
+  // handler's idle repaint would otherwise wipe this blue within a
+  // millisecond of showing it. Hold blue long enough to actually read as
+  // "switching", overriding the module's own green capture indicator.
+  fingerprint_led_lock(true);
+  fingerprint_led_hold(FP_LED_SWITCHING, 1200);
   imk_service_switch_host(addr, atype);
 }
 
@@ -655,4 +657,7 @@ void imk_proto_on_fingerprint(uint16_t page_id) {
   memcpy(notif + 3, hmac, 8);
   if (s_send) s_send(notif, sizeof(notif));
   ESP_LOGI(TAG, "sent signed match notification for app slot %u (page %u)", app_slot, page_id);
+  // Green belongs to a real auth match only — painting it in main.c would
+  // also flash it on the switch finger, which routes away above.
+  fingerprint_led_hold(FP_LED_MATCH, 400);
 }

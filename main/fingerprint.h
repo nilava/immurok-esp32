@@ -54,6 +54,12 @@ typedef enum {
 } fp_led_state_t;
 
 void fingerprint_led_state(fp_led_state_t s);
+// Hold a steady state for `ms`, re-asserting it so the module's own
+// post-capture auto-indication (green on match / red blink on fail) can't
+// show through. Blocks for the duration.
+void fingerprint_led_hold(fp_led_state_t s, uint32_t ms);
+// Suppress idle repaints (used while switching hosts, which disconnects).
+void fingerprint_led_lock(bool locked);
 void fingerprint_led_set_connected(bool connected);  // steers idle color
 void fingerprint_led_idle(void);   // purple when connected, yellow when not
 void fingerprint_led_sweep(void);  // diagnostic: cycle the 7 colors, 2s each

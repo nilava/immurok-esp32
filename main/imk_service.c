@@ -179,6 +179,9 @@ static void switch_window_end(void *arg) {
     esp_ble_gap_stop_advertising();
     esp_ble_gap_start_advertising(&adv_params);
   }
+  // The switch is over: release the LED hold and show real connection state.
+  fingerprint_led_lock(false);
+  fingerprint_led_idle();
   ESP_LOGW(TAG, "host switch window expired; open advertising");
 }
 

@@ -237,9 +237,17 @@ static void aura_off(void) { aura(AURA_OFF, 0, 0, 0); }
 static void aura_breathe(uint8_t color) { aura(AURA_BREATHE, color, color, 0); }
 
 // Whether a host is connected steers what "idle" looks like (purple = ready,
-// yellow = can't reach a computer). Set from the BLE layer.
+// red = can't reach a computer). Set from the BLE layer.
 static bool s_host_connected;
+
+// While locked, idle repaints are suppressed. Needed because switching hosts
+// deliberately disconnects, and the disconnect handler would otherwise wipe
+// the "switching" blue within milliseconds of it being shown.
+static bool s_led_locked;
+void fingerprint_led_lock(bool locked) { s_led_locked = locked; }
+
 void fingerprint_led_set_connected(bool connected) {
+  if (connected) s_led_locked = false;  // a real connection ends any hold
   s_host_connected = connected;
   fingerprint_led_idle();
 }
@@ -277,7 +285,23 @@ void fingerprint_led(uint8_t color, bool steady) {
 void fingerprint_led_breathe(uint8_t color) { (void)color; fingerprint_led_state(FP_LED_ENROLL_PLACE); }
 
 void fingerprint_led_idle(void) {
+  if (s_led_locked) return;
   fingerprint_led_state(s_host_connected ? FP_LED_IDLE : FP_LED_UNREACHABLE);
+}
+
+// The module drives its own brief LED indication right after a capture (green
+// on a successful match, a red blink on failure). It is not one of the
+// documented parameters — no ControlBLN option or system parameter disables
+// it — so instead re-assert our own color across the window where those
+// auto-indications land, and ours is what the user actually sees. Steady
+// states only: re-issuing a breathe command would restart its fade.
+void fingerprint_led_hold(fp_led_state_t s, uint32_t ms) {
+  const uint32_t step = 120;
+  fingerprint_led_state(s);
+  for (uint32_t t = 0; t < ms; t += step) {
+    vTaskDelay(pdMS_TO_TICKS(step));
+    fingerprint_led_state(s);
+  }
 }
 
 // Console diagnostic: sweep the seven indexed colors, 2s each, then idle.

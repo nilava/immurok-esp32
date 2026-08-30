@@ -94,7 +94,7 @@ void app_main(void) {
           uint16_t page = 0, score = 0;
           fingerprint_led_state(FP_LED_READING);
           bool m = fingerprint_search(&page, &score);
-          if (!m) fingerprint_led_state(FP_LED_NOMATCH);
+          if (!m) fingerprint_led_hold(FP_LED_NOMATCH, 700);
           imk_proto_on_pairing_touch(m);
         } else {
           // Presence stages: any live finger confirms.
@@ -131,7 +131,9 @@ void app_main(void) {
           ESP_LOGI(TAG, "MATCH slot=%u score=%u", page, score);
         } else {
           ESP_LOGW(TAG, "no match");
-          fingerprint_led_state(FP_LED_NOMATCH);
+          // Hold red across the module's own red-blink indicator, which is
+          // what made a single wrong touch read as a flicker.
+          fingerprint_led_hold(FP_LED_NOMATCH, 700);
         }
         if (imk_proto_gate_active()) {
           // A gate is waiting on this verification — resolve it locally.
@@ -153,8 +155,9 @@ void app_main(void) {
         }
         vTaskDelay(pdMS_TO_TICKS(50));
       }
-      // Let the verdict linger a beat, then ease back to idle.
-      vTaskDelay(pdMS_TO_TICKS(700));
+      // Verdicts now hold themselves; just a short beat before idle.
+      // (No-op while the LED is locked, e.g. mid host-switch.)
+      vTaskDelay(pdMS_TO_TICKS(250));
       fingerprint_led_idle();
     }
     vTaskDelay(pdMS_TO_TICKS(80));
