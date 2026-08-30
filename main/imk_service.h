@@ -19,3 +19,8 @@ void imk_service_respond(const uint8_t *data, size_t len);
 void imk_service_switch_host(const uint8_t addr[6], uint8_t atype);
 
 bool imk_service_connected(void);
+
+// Proximity feasibility probe: passively survey nearby BLE advertisers for
+// `seconds` and log each one's name, address, RSSI and advertising cadence.
+// Blocks — call from the console task, not from a BLE callback.
+void imk_service_scan_dump(uint32_t seconds);

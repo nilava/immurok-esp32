@@ -168,6 +168,87 @@ static esp_ble_adv_params_t adv_params = {
   .adv_filter_policy = ADV_FILTER_ALLOW_SCAN_ANY_CON_ANY,
 };
 
+// ---- Stage A proximity probe: passive survey of nearby advertisers -------
+// Duty cycle is deliberately gentle (30ms window / 100ms interval = 30%): the
+// connection runs at latency 29 / 6s supervision, which leaves only ~4
+// connection events of margin, and starving the radio has caused reason-0x8
+// disconnects on this project before. Duplicate filtering is DISABLED so we
+// see every advertisement and can measure the ring's actual cadence — the
+// controller's dup cache never refreshes (CONFIG_BT_CTRL_DUPL_SCAN_CACHE_
+// REFRESH_PERIOD=0), so leaving it on would report each device exactly once.
+// Filter policy is ALLOW_ALL and matching happens in software, because the
+// controller whitelist is shared with the host-switch advertising logic.
+static esp_ble_scan_params_t scan_params = {
+  .scan_type = BLE_SCAN_TYPE_ACTIVE,   // active: also collects scan responses,
+                                       // in case the name lives there
+  .own_addr_type = BLE_ADDR_TYPE_PUBLIC,
+  .scan_filter_policy = BLE_SCAN_FILTER_ALLOW_ALL,
+  .scan_interval = 0x00A0,             // 100 ms
+  .scan_window   = 0x0030,             // 30 ms
+  .scan_duplicate = BLE_SCAN_DUPLICATE_DISABLE,
+};
+
+#define SCAN_MAX_DEVICES 48
+typedef struct {
+  esp_bd_addr_t bda;
+  uint8_t atype;
+  char name[26];
+  uint16_t packets;
+  int8_t rssi_last;
+  int8_t rssi_best;
+  int64_t first_us;
+  int64_t last_us;
+} scan_entry_t;
+
+static scan_entry_t s_scan[SCAN_MAX_DEVICES];
+static volatile int s_scan_n;
+static volatile bool s_scanning;
+
+// Runs on the BTC task (3 KB stack) — keep it allocation-free and quiet; all
+// reporting happens later from the console task.
+static void scan_record(esp_ble_gap_cb_param_t *param) {
+  uint8_t nlen = 0;
+  uint8_t *nm = esp_ble_resolve_adv_data_by_type(
+      param->scan_rst.ble_adv,
+      param->scan_rst.adv_data_len + param->scan_rst.scan_rsp_len,
+      ESP_BLE_AD_TYPE_NAME_CMPL, &nlen);
+  if (!nm || nlen == 0) {
+    nm = esp_ble_resolve_adv_data_by_type(
+        param->scan_rst.ble_adv,
+        param->scan_rst.adv_data_len + param->scan_rst.scan_rsp_len,
+        ESP_BLE_AD_TYPE_NAME_SHORT, &nlen);
+  }
+
+  for (int i = 0; i < s_scan_n; i++) {
+    if (memcmp(s_scan[i].bda, param->scan_rst.bda, 6) == 0) {
+      s_scan[i].packets++;
+      s_scan[i].rssi_last = param->scan_rst.rssi;
+      if (param->scan_rst.rssi > s_scan[i].rssi_best) s_scan[i].rssi_best = param->scan_rst.rssi;
+      s_scan[i].last_us = esp_timer_get_time();
+      if (s_scan[i].name[0] == 0 && nm && nlen) {   // name may arrive later
+        size_t c = nlen < sizeof(s_scan[i].name) - 1 ? nlen : sizeof(s_scan[i].name) - 1;
+        memcpy(s_scan[i].name, nm, c);
+        s_scan[i].name[c] = 0;
+      }
+      return;
+    }
+  }
+  if (s_scan_n >= SCAN_MAX_DEVICES) return;
+  scan_entry_t *e = &s_scan[s_scan_n];
+  memcpy(e->bda, param->scan_rst.bda, 6);
+  e->atype = param->scan_rst.ble_addr_type;
+  e->packets = 1;
+  e->rssi_last = e->rssi_best = param->scan_rst.rssi;
+  e->first_us = e->last_us = esp_timer_get_time();
+  e->name[0] = 0;
+  if (nm && nlen) {
+    size_t c = nlen < sizeof(e->name) - 1 ? nlen : sizeof(e->name) - 1;
+    memcpy(e->name, nm, c);
+    e->name[c] = 0;
+  }
+  s_scan_n++;
+}
+
 static void switch_window_end(void *arg) {
   (void)arg;
   if (!s_switch_pending) return;
@@ -204,6 +285,43 @@ void imk_service_switch_host(const uint8_t addr[6], uint8_t atype) {
     adv_params.adv_filter_policy = ADV_FILTER_ALLOW_SCAN_ANY_CON_WLST;
     esp_ble_gap_start_advertising(&adv_params);
   }
+}
+
+// Stage A probe: survey nearby BLE advertisers for `seconds`, then print what
+// was seen. Blocks the caller (intended for the USB console task, never the
+// BLE callback). Reports packet counts and mean advertising gap so the ring's
+// cadence can be compared against any proposed absence timeout.
+void imk_service_scan_dump(uint32_t seconds) {
+  s_scan_n = 0;
+  memset(s_scan, 0, sizeof(s_scan));
+  s_scanning = true;
+  esp_err_t rc = esp_ble_gap_set_scan_params(&scan_params);
+  if (rc != ESP_OK) {
+    s_scanning = false;
+    ESP_LOGE(TAG, "set_scan_params failed: %s", esp_err_to_name(rc));
+    return;
+  }
+  ESP_LOGW(TAG, "scanning %lus — wear the ring and stay put…", (unsigned long)seconds);
+  vTaskDelay(pdMS_TO_TICKS(seconds * 1000));
+  s_scanning = false;
+  esp_ble_gap_stop_scanning();
+  vTaskDelay(pdMS_TO_TICKS(200));
+
+  int n = s_scan_n;
+  ESP_LOGW(TAG, "---- %d device(s) seen in %lus ----", n, (unsigned long)seconds);
+  for (int i = 0; i < n; i++) {
+    scan_entry_t *e = &s_scan[i];
+    int64_t span_ms = (e->last_us - e->first_us) / 1000;
+    int gap_ms = (e->packets > 1) ? (int)(span_ms / (e->packets - 1)) : -1;
+    ESP_LOGW(TAG,
+             "%02x:%02x:%02x:%02x:%02x:%02x type=%u rssi=%d/%d pkts=%u gap=%dms %s%s",
+             e->bda[0], e->bda[1], e->bda[2], e->bda[3], e->bda[4], e->bda[5],
+             e->atype, e->rssi_last, e->rssi_best, e->packets, gap_ms,
+             e->name[0] ? e->name : "(no name)",
+             (strncmp(e->name, "UH_", 3) == 0) ? "   <<< ULTRAHUMAN RING" : "");
+  }
+  if (n >= SCAN_MAX_DEVICES) ESP_LOGW(TAG, "(device table full — some were dropped)");
+  ESP_LOGW(TAG, "---- end of scan ----");
 }
 
 void imk_service_respond(const uint8_t *data, size_t len) {
@@ -252,6 +370,21 @@ static void gap_handler(esp_gap_ble_cb_event_t event, esp_ble_gap_cb_param_t *pa
       break;
     case ESP_GAP_BLE_SEC_REQ_EVT:
       esp_ble_gap_security_rsp(param->ble_security.ble_req.bd_addr, true);
+      break;
+    case ESP_GAP_BLE_SCAN_PARAM_SET_COMPLETE_EVT:
+      if (s_scanning) esp_ble_gap_start_scanning(0);  // stopped explicitly
+      break;
+    case ESP_GAP_BLE_SCAN_START_COMPLETE_EVT:
+      ESP_LOGW(TAG, "scan started (%s)",
+               param->scan_start_cmpl.status == ESP_BT_STATUS_SUCCESS ? "ok" : "FAIL");
+      break;
+    case ESP_GAP_BLE_SCAN_RESULT_EVT:
+      if (s_scanning && param->scan_rst.search_evt == ESP_GAP_SEARCH_INQ_RES_EVT) {
+        scan_record(param);
+      }
+      break;
+    case ESP_GAP_BLE_SCAN_STOP_COMPLETE_EVT:
+      ESP_LOGW(TAG, "scan stopped");
       break;
     default:
       break;
