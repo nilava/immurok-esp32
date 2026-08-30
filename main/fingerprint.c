@@ -304,6 +304,13 @@ void fingerprint_led_idle(void) {
 // it — so instead re-assert our own color across the window where those
 // auto-indications land, and ours is what the user actually sees. Steady
 // states only: re-issuing a breathe command would restart its fade.
+// Force the ring dark, bypassing the state dedupe (used to try to interrupt
+// the module's own post-match indicator).
+void fingerprint_led_off(void) {
+  s_current_state = -1;
+  aura_off();
+}
+
 void fingerprint_led_hold(fp_led_state_t s, uint32_t ms) {
   fingerprint_led_state(s);
   vTaskDelay(pdMS_TO_TICKS(ms));
@@ -394,11 +401,16 @@ bool fingerprint_search(uint16_t *page_id, uint16_t *score) {
       if (score) *score = s;
       return true;
     }
+    return false;  // searched, found, but too weak — a real verdict
   }
+  // 0x09 = "not found" per the datasheet: an authoritative no-match. Trust it
+  // instead of grinding through the per-slot fallback, which fires the
+  // module's red blink once per failed Match and read as a flicker.
+  if (sok && confirm == 0x09) return false;
 
-  // This ZW101 firmware returns Search as confirm-only (no page/score), so fall
-  // back to per-slot LoadChar (0x07) into buffer 2 + Match (0x03), which is what
-  // actually reports the matched slot on this sensor.
+  // Fallback only for a MALFORMED Search reply (the old UART-desync case where
+  // it came back confirm-only with no page/score). A well-formed 0x00 or 0x09
+  // answer is handled above and never reaches here.
   for (uint16_t slot = 0; slot <= 15; slot++) {
     uint8_t load[] = {0x02, (uint8_t)(slot >> 8), (uint8_t)(slot & 0xff)};
     confirm = 0xff;

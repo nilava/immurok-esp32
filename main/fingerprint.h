@@ -61,6 +61,7 @@ void fingerprint_led_state(fp_led_state_t s);
 void fingerprint_led_hold(fp_led_state_t s, uint32_t ms);
 // Suppress idle repaints (used while switching hosts, which disconnects).
 void fingerprint_led_lock(bool locked);
+void fingerprint_led_off(void);  // force dark, bypassing the repaint dedupe
 void fingerprint_led_set_connected(bool connected);  // steers idle color
 void fingerprint_led_idle(void);   // purple when connected, yellow when not
 void fingerprint_led_sweep(void);  // diagnostic: cycle the 7 colors, 2s each
