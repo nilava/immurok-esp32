@@ -223,7 +223,7 @@ bool fingerprint_present(void) {
 static void aura(uint8_t function, uint8_t p1, uint8_t p2, uint8_t count) {
   uint8_t params[] = {function, p1, p2, count};
   uint8_t confirm = 0xff;
-  ESP_LOGI(TAG, "AURA fn=%u p1=%u p2=%u cyc=%u", function, p1, p2, count);
+  ESP_LOGD(TAG, "AURA fn=%u p1=%u p2=%u cyc=%u", function, p1, p2, count);
   fp_command(CMD_AURA_LED, params, sizeof(params), &confirm, NULL, NULL, 1000);
 }
 

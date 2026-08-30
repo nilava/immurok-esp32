@@ -633,14 +633,12 @@ static void handle_switch_finger(void) {
   // millisecond of showing it. Hold blue long enough to actually read as
   // "switching", overriding the module's own green capture indicator.
   fingerprint_led_lock(true);
-  // The module drives its own green for ~1s after a successful match and
-  // ignores steady-color commands during it (proven: our blue goes out in the
-  // same millisecond as the match and still isn't visible). Try an explicit
-  // OFF first — a different function code may interrupt where a color didn't —
-  // then settle into the breathing blue of the switch window.
-  fingerprint_led_off();
-  vTaskDelay(pdMS_TO_TICKS(120));
-  fingerprint_led_off();
+  // The module drives its own green for ~1s after any successful match and
+  // ignores ControlBLN entirely while it runs — tested with both a colour
+  // command (fn 3) and an explicit off (fn 4), sent in the same millisecond
+  // as the match; neither interrupts it. So the ring reads "recognised"
+  // (module green) then "switching" (our breathing blue), and the green is
+  // simply not ours to remove.
   fingerprint_led_state(FP_LED_SWITCHING);
   imk_service_switch_host(addr, atype);
 }
