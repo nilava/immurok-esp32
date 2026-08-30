@@ -633,7 +633,11 @@ static void handle_switch_finger(void) {
   // millisecond of showing it. Hold blue long enough to actually read as
   // "switching", overriding the module's own green capture indicator.
   fingerprint_led_lock(true);
-  fingerprint_led_hold(FP_LED_SWITCHING, 1200);
+  // Stomp the module's own green capture indicator with solid blue first —
+  // repainting a breathing state would restart its fade every time — then
+  // settle into the breathing blue that marks the switch window.
+  fingerprint_led_hold(FP_LED_LOCK_SENT, 360);
+  fingerprint_led_state(FP_LED_SWITCHING);
   imk_service_switch_host(addr, atype);
 }
 

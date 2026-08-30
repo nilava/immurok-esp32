@@ -49,7 +49,8 @@ typedef enum {
   FP_LED_ENROLL_OK,
   FP_LED_ENROLL_FAIL,
   FP_LED_PAIRING,
-  FP_LED_SWITCHING,
+  FP_LED_SWITCHING,   // breathing blue: handing off to the other host
+  FP_LED_LOCK_SENT,   // steady blue: long-press lock request sent
   FP_LED_AUTH_WAIT,  // breathing: verify an enrolled finger to proceed (any gate)
 } fp_led_state_t;
 

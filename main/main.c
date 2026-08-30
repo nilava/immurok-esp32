@@ -118,18 +118,21 @@ void app_main(void) {
         // as an ugly triple-flicker on every ordinary wrong-finger touch.
         // Trade: rare cold-boot misses need a second tap, same as always.
         matched = fingerprint_search(&page, &score);
-        if (showed_reading) {
-          // A fast capture (well under a breathing cycle) painting straight
-          // over "reading" reads as a flash, not a transition — give it a
-          // minimum visible stretch before the verdict replaces it.
-          TickType_t elapsed = xTaskGetTickCount() - reading_start;
-          if (elapsed < pdMS_TO_TICKS(350)) {
-            vTaskDelay(pdMS_TO_TICKS(350) - elapsed);
-          }
-        }
         if (matched) {
+          // Route immediately — no padding. The module lights its own green
+          // the moment a match lands, so any delay here before we paint is
+          // dead time where that green is the only thing on the ring.
           ESP_LOGI(TAG, "MATCH slot=%u score=%u", page, score);
         } else {
+          if (showed_reading) {
+            // A fast capture painting the red verdict straight over "reading"
+            // reads as a flash, not a transition — give reading a minimum
+            // visible stretch first. Only on this path: a match must not wait.
+            TickType_t elapsed = xTaskGetTickCount() - reading_start;
+            if (elapsed < pdMS_TO_TICKS(350)) {
+              vTaskDelay(pdMS_TO_TICKS(350) - elapsed);
+            }
+          }
           ESP_LOGW(TAG, "no match");
           // Hold red across the module's own red-blink indicator, which is
           // what made a single wrong touch read as a flicker.
@@ -150,7 +153,7 @@ void app_main(void) {
         if (!lock_sent &&
             (xTaskGetTickCount() - hold_start) > pdMS_TO_TICKS(2000)) {
           imk_proto_send_lock_request();
-          fingerprint_led_state(FP_LED_SWITCHING);  // steady blue: lock sent
+          fingerprint_led_state(FP_LED_LOCK_SENT);  // steady blue: lock sent
           lock_sent = true;
         }
         vTaskDelay(pdMS_TO_TICKS(50));

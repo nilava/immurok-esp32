@@ -268,7 +268,8 @@ void fingerprint_led_state(fp_led_state_t s) {
     case FP_LED_ENROLL_OK:    aura_steady(C_GREEN); break;
     case FP_LED_ENROLL_FAIL:  aura_steady(C_RED); break;
     case FP_LED_PAIRING:      aura_breathe(C_PURPLE); break;
-    case FP_LED_SWITCHING:    aura_steady(C_BLUE); break;
+    case FP_LED_SWITCHING:    aura_breathe(C_BLUE); break;
+    case FP_LED_LOCK_SENT:    aura_steady(C_BLUE); break;
     case FP_LED_AUTH_WAIT:    aura_breathe(C_CYAN); break;
   }
 }
