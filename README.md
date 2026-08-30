@@ -97,19 +97,115 @@ to move anything.
 
 ## Build and flash
 
-Requires **ESP-IDF v5.3.2** (other 5.x releases will likely work; this is what it is
-built and tested against).
+Written assuming you have never used ESP-IDF before. If you have, it is just
+`idf.py set-target esp32s3 && idf.py flash monitor`.
+
+### 1. Install ESP-IDF v5.3.2
+
+ESP-IDF is Espressif's SDK — the compiler, the libraries and the `idf.py` tool. This
+project is built and tested against **v5.3.2**; other 5.x releases will most likely work.
+
+**macOS / Linux**
 
 ```bash
-source ~/esp/esp-idf/export.sh
-idf.py set-target esp32s3
+# Prerequisites: git, cmake, ninja, python3.
+#   macOS:  brew install cmake ninja python3
+#   Debian/Ubuntu: sudo apt install git wget flex bison gperf python3 python3-venv \
+#                                   cmake ninja-build ccache libffi-dev libssl-dev dfu-util
+
+mkdir -p ~/esp && cd ~/esp
+git clone -b v5.3.2 --recursive https://github.com/espressif/esp-idf.git
+cd ~/esp/esp-idf
+./install.sh esp32s3
+```
+
+**Windows** — use the [ESP-IDF Windows Installer](https://dl.espressif.com/dl/esp-idf/),
+pick v5.3.2, then use the "ESP-IDF PowerShell/CMD" shortcut it creates instead of running
+`export.sh`.
+
+### 2. Get the firmware
+
+```bash
+cd ~/esp
+git clone https://github.com/nilava/immurok-esp32.git
+cd immurok-esp32
+```
+
+### 3. Build
+
+**Every new terminal needs the ESP-IDF environment loaded first.** This is the single most
+common stumble — if `idf.py` is "command not found", you skipped this line:
+
+```bash
+source ~/esp/esp-idf/export.sh    # macOS/Linux, once per terminal session
+idf.py set-target esp32s3         # only needed the first time
 idf.py build
+```
+
+The first build takes several minutes and prints a lot. It ends with
+`Project build complete.`
+
+### 4. Flash
+
+Plug the XIAO into USB and run:
+
+```bash
 idf.py flash monitor
 ```
 
-Partition layout (`partitions.csv`): 64 KB NVS at `0x9000`, single 3 MB app at `0x20000`.
-There is no OTA slot — this firmware updates over USB. The NVS offset is deliberately
-stable so a reflash keeps your pairing keys, enrolled fingerprints and vault contents.
+`idf.py` usually finds the board on its own. To be explicit, pass the port with `-p`:
+
+| OS | Find the port | Looks like |
+|---|---|---|
+| macOS | `ls /dev/cu.usbmodem*` | `/dev/cu.usbmodem101` |
+| Linux | `ls /dev/ttyACM*` | `/dev/ttyACM0` |
+| Windows | Device Manager → Ports (COM & LPT) | `COM7` |
+
+```bash
+idf.py -p /dev/cu.usbmodem101 flash monitor
+```
+
+`monitor` shows the device's serial output. **Press `Ctrl+]` to exit it** (not Ctrl+C).
+
+### 5. First boot
+
+You should see something like:
+
+```
+fp: sensor verify OK with tx=43 rx=44
+fp: sensor init: 0 template(s) enrolled, index bitmap=0x00
+imk_crypto: crypto init: unpaired
+imk_service: advertising as immurok-tt (ok)
+immurok: immurok-esp32 boot; console: d=download r=restart ...
+```
+
+`sensor verify OK` means the wiring is right. If you instead see
+`sensor verify failed on both orientations`, the sensor is not answering — check the
+3V3/GND connections first, then the two data wires.
+
+The ring should settle to steady purple (or breathing red if no computer is paired yet).
+Now continue to [Setup](#setup).
+
+### Troubleshooting
+
+- **Board doesn't appear as a serial port at all.** Try a different USB-C cable. Many
+  cables are charge-only with no data lines, and this trips up more people than any other
+  cause. A cable that charges your phone is not proof.
+- **`Permission denied` on `/dev/ttyACM0` (Linux).** Add yourself to the serial group and
+  log out and back in: `sudo usermod -a -G dialout $USER`
+- **Flashing fails or the port vanishes mid-flash.** Put the board into download mode
+  manually: hold **BOOT**, tap **RESET**, release **BOOT**, then re-run the flash command.
+- **Once this firmware is already running**, you don't need the button dance — press `d`
+  in the monitor to reboot straight into download mode.
+- **`idf.py: command not found`.** You didn't `source ~/esp/esp-idf/export.sh` in this
+  terminal. It has to be done in every new shell.
+
+### Partition layout
+
+`partitions.csv`: 64 KB NVS at `0x9000`, a single 3 MB app at `0x20000`. There is no OTA
+slot — this firmware updates over USB. The NVS offset is deliberately kept stable across
+versions, so reflashing preserves your pairing keys, enrolled fingerprints and vault
+contents. `idf.py erase-flash` wipes all of that and puts you back to unpaired.
 
 ## Setup
 
