@@ -153,14 +153,17 @@ void app_main(void) {
       // Hold >=2s = lock request (reference behavior: fires regardless of the
       // match outcome; the app ignores it when the screen is already locked).
       bool lock_sent = false;
-      while (fingerprint_present()) {
+      // Poll the sensor, not the IRQ pin — see fingerprint_finger_down().
+      // Capped so a stuck/dirty sensor can't pin the main loop forever.
+      while (fingerprint_finger_down() &&
+             (xTaskGetTickCount() - touch_start) < pdMS_TO_TICKS(15000)) {
         if (!lock_sent &&
             (xTaskGetTickCount() - touch_start) > pdMS_TO_TICKS(2000)) {
           imk_proto_send_lock_request();
           fingerprint_led_state(FP_LED_LOCK_SENT);  // steady blue: lock sent
           lock_sent = true;
         }
-        vTaskDelay(pdMS_TO_TICKS(50));
+        vTaskDelay(pdMS_TO_TICKS(120));
       }
       ESP_LOGI(TAG, "touch released after %lu ms (lock %s)",
                (unsigned long)((xTaskGetTickCount() - touch_start) * portTICK_PERIOD_MS),

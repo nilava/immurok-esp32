@@ -8,8 +8,14 @@
 
 void fingerprint_init(void);
 
-// True while a finger is on the sensor (IRQ pin, active high).
+// True while a finger is on the sensor (IRQ pin, active high). Only valid
+// for detecting the START of a touch — the pin de-asserts once a capture
+// completes, so it cannot tell you a finger is still held.
 bool fingerprint_present(void);
+
+// True while a finger is still on the sensor, asked of the sensor itself.
+// Use this for hold/lift detection; costs one UART round-trip per call.
+bool fingerprint_finger_down(void);
 
 // Capture + search the enrolled database. On a match returns true and writes the
 // matched template slot (page id) to *page_id and the score to *score.

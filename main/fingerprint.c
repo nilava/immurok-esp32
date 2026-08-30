@@ -181,6 +181,17 @@ bool fingerprint_present(void) {
   return gpio_get_level(FP_INT_PIN) == FP_INT_ACTIVE;
 }
 
+// Is a finger STILL on the sensor? The IRQ pin can't answer this: it
+// de-asserts the moment a capture completes even while the finger stays
+// down (proven — a held touch logged a 0-iteration wait loop). Ask the
+// sensor directly instead: GenImg returns 0x00 when it can capture an
+// image, 0x02 when there is no finger.
+bool fingerprint_finger_down(void) {
+  uint8_t confirm = 0xff;
+  bool ok = fp_command(CMD_GEN_IMAGE, NULL, 0, &confirm, NULL, NULL, 600);
+  return ok && confirm == 0x00;
+}
+
 // Aura params: [mode][speed][color][count]. Modes: 1=breathe 2=flash
 // 3=steady-on 4=off. Speed: ~0 fast … 255 slow (100 = calm fade).
 // Color indices are UNIT-SPECIFIC — swept on this ZW101 with the 'c'
