@@ -192,6 +192,18 @@ bool fingerprint_finger_down(void) {
   return ok && confirm == 0x00;
 }
 
+// Block until the finger is lifted (or `timeout_ms` passes). Must poll the
+// sensor rather than the IRQ pin: the pin de-asserts on capture completion,
+// so an IRQ-based wait returned instantly and the next enrollment capture
+// could re-photograph the finger that was never lifted.
+static void wait_for_lift(uint32_t timeout_ms) {
+  TickType_t deadline = xTaskGetTickCount() + pdMS_TO_TICKS(timeout_ms);
+  while (fingerprint_finger_down() && xTaskGetTickCount() < deadline) {
+    vTaskDelay(pdMS_TO_TICKS(120));
+  }
+  vTaskDelay(pdMS_TO_TICKS(150));  // settle so the next capture is a fresh press
+}
+
 // Aura params: [mode][speed][color][count]. Modes: 1=breathe 2=flash
 // 3=steady-on 4=off. Speed: ~0 fast … 255 slow (100 = calm fade).
 // Color indices are UNIT-SPECIFIC — swept on this ZW101 with the 'c'
@@ -464,7 +476,7 @@ bool fingerprint_enroll(uint16_t slot, void (*prompt)(const char *msg)) {
   if (prompt) prompt("place finger");
   if (!capture_to_buffer(1, 8000)) return false;
   if (prompt) prompt("lift finger");
-  while (fingerprint_present()) vTaskDelay(pdMS_TO_TICKS(50));
+  wait_for_lift(6000);
   if (prompt) prompt("place same finger again");
   if (!capture_to_buffer(2, 8000)) return false;
 
@@ -516,7 +528,7 @@ bool fingerprint_enroll_stream(uint16_t slot,
     if (i < TOTAL) {
       if (progress) progress(0x03, i, TOTAL);  // lift finger
       fingerprint_led_state(FP_LED_ENROLL_LIFT);  // steady cyan
-      while (fingerprint_present()) vTaskDelay(pdMS_TO_TICKS(50));
+      wait_for_lift(6000);
     }
   }
 
