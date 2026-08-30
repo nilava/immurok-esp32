@@ -632,13 +632,10 @@ static void handle_switch_finger(void) {
   // handler's idle repaint would otherwise wipe this blue within a
   // millisecond of showing it. Hold blue long enough to actually read as
   // "switching", overriding the module's own green capture indicator.
+  // The module's own green ("recognised") runs first and is not suppressible;
+  // the breathing blue that follows is the switch window. Two deliberate
+  // stages rather than a colour we failed to hide.
   fingerprint_led_lock(true);
-  // The module drives its own green for ~1s after any successful match and
-  // ignores ControlBLN entirely while it runs — tested with both a colour
-  // command (fn 3) and an explicit off (fn 4), sent in the same millisecond
-  // as the match; neither interrupts it. So the ring reads "recognised"
-  // (module green) then "switching" (our breathing blue), and the green is
-  // simply not ours to remove.
   fingerprint_led_state(FP_LED_SWITCHING);
   imk_service_switch_host(addr, atype);
 }
@@ -663,7 +660,9 @@ void imk_proto_on_fingerprint(uint16_t page_id) {
   memcpy(notif + 3, hmac, 8);
   if (s_send) s_send(notif, sizeof(notif));
   ESP_LOGI(TAG, "sent signed match notification for app slot %u (page %u)", app_slot, page_id);
-  // Green belongs to a real auth match only — painting it in main.c would
-  // also flash it on the switch finger, which routes away above.
-  fingerprint_led_hold(FP_LED_MATCH, 400);
+  // No green paint here: the module already flashes its own green for ~1s on
+  // any successful match and can't be overridden during it. Ours would have
+  // been invisible anyway, and holding for it only delayed the return to
+  // idle. Green is the module's "recognised" beat; our colours say what
+  // happens next.
 }
