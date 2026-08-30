@@ -23,4 +23,6 @@ bool imk_service_connected(void);
 // Proximity feasibility probe: passively survey nearby BLE advertisers for
 // `seconds` and log each one's name, address, RSSI and advertising cadence.
 // Blocks — call from the console task, not from a BLE callback.
-void imk_service_scan_dump(uint32_t seconds);
+// `active` also solicits scan responses (finds names that aren't in the
+// advertising packet) at the cost of transmitting scan requests.
+void imk_service_scan_dump(uint32_t seconds, bool active);

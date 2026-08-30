@@ -179,8 +179,8 @@ static esp_ble_adv_params_t adv_params = {
 // Filter policy is ALLOW_ALL and matching happens in software, because the
 // controller whitelist is shared with the host-switch advertising logic.
 static esp_ble_scan_params_t scan_params = {
-  .scan_type = BLE_SCAN_TYPE_ACTIVE,   // active: also collects scan responses,
-                                       // in case the name lives there
+  .scan_type = BLE_SCAN_TYPE_PASSIVE,  // overridden per-probe; passive is the
+                                       // gentler default (no scan requests)
   .own_addr_type = BLE_ADDR_TYPE_PUBLIC,
   .scan_filter_policy = BLE_SCAN_FILTER_ALLOW_ALL,
   .scan_interval = 0x00A0,             // 100 ms
@@ -206,18 +206,34 @@ static volatile bool s_scanning;
 
 // Runs on the BTC task (3 KB stack) — keep it allocation-free and quiet; all
 // reporting happens later from the console task.
+// `ble_adv` holds the advertising payload immediately followed by the
+// scan-response payload. They must be parsed as two separate buffers — passing
+// the summed length to one call can straddle the boundary and mis-read a
+// length byte, which would silently hide the very name we are looking for.
+static uint8_t *scan_find_name(esp_ble_gap_cb_param_t *param, uint8_t *nlen) {
+  uint8_t *adv = param->scan_rst.ble_adv;
+  uint8_t alen = param->scan_rst.adv_data_len;
+  uint8_t slen = param->scan_rst.scan_rsp_len;
+  uint8_t *n = NULL;
+  const esp_ble_adv_data_type types[2] = {ESP_BLE_AD_TYPE_NAME_CMPL,
+                                          ESP_BLE_AD_TYPE_NAME_SHORT};
+  for (int t = 0; t < 2; t++) {
+    *nlen = 0;
+    n = esp_ble_resolve_adv_data_by_type(adv, alen, types[t], nlen);
+    if (n && *nlen) return n;
+  }
+  for (int t = 0; t < 2 && slen; t++) {
+    *nlen = 0;
+    n = esp_ble_resolve_adv_data_by_type(adv + alen, slen, types[t], nlen);
+    if (n && *nlen) return n;
+  }
+  *nlen = 0;
+  return NULL;
+}
+
 static void scan_record(esp_ble_gap_cb_param_t *param) {
   uint8_t nlen = 0;
-  uint8_t *nm = esp_ble_resolve_adv_data_by_type(
-      param->scan_rst.ble_adv,
-      param->scan_rst.adv_data_len + param->scan_rst.scan_rsp_len,
-      ESP_BLE_AD_TYPE_NAME_CMPL, &nlen);
-  if (!nm || nlen == 0) {
-    nm = esp_ble_resolve_adv_data_by_type(
-        param->scan_rst.ble_adv,
-        param->scan_rst.adv_data_len + param->scan_rst.scan_rsp_len,
-        ESP_BLE_AD_TYPE_NAME_SHORT, &nlen);
-  }
+  uint8_t *nm = scan_find_name(param, &nlen);
 
   for (int i = 0; i < s_scan_n; i++) {
     if (memcmp(s_scan[i].bda, param->scan_rst.bda, 6) == 0) {
@@ -291,9 +307,12 @@ void imk_service_switch_host(const uint8_t addr[6], uint8_t atype) {
 // was seen. Blocks the caller (intended for the USB console task, never the
 // BLE callback). Reports packet counts and mean advertising gap so the ring's
 // cadence can be compared against any proposed absence timeout.
-void imk_service_scan_dump(uint32_t seconds) {
+void imk_service_scan_dump(uint32_t seconds, bool active) {
   s_scan_n = 0;
   memset(s_scan, 0, sizeof(s_scan));
+  // Passive hears only advertising packets; active also solicits scan
+  // responses, where a device may hide its name — at the cost of transmitting.
+  scan_params.scan_type = active ? BLE_SCAN_TYPE_ACTIVE : BLE_SCAN_TYPE_PASSIVE;
   s_scanning = true;
   esp_err_t rc = esp_ble_gap_set_scan_params(&scan_params);
   if (rc != ESP_OK) {
@@ -301,7 +320,8 @@ void imk_service_scan_dump(uint32_t seconds) {
     ESP_LOGE(TAG, "set_scan_params failed: %s", esp_err_to_name(rc));
     return;
   }
-  ESP_LOGW(TAG, "scanning %lus — wear the ring and stay put…", (unsigned long)seconds);
+  ESP_LOGW(TAG, "scanning %lus (%s) — wear the ring and stay put…",
+           (unsigned long)seconds, active ? "active" : "passive");
   vTaskDelay(pdMS_TO_TICKS(seconds * 1000));
   s_scanning = false;
   esp_ble_gap_stop_scanning();

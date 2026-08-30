@@ -35,8 +35,10 @@ static void console_task(void *arg) {
     } else if (c == 'c' || c == 'C') {
       ESP_LOGW(TAG, "LED color sweep: watch the ring, compare with the logged names");
       fingerprint_led_sweep();
-    } else if (c == 's' || c == 'S') {
-      imk_service_scan_dump(15);
+    } else if (c == 's') {
+      imk_service_scan_dump(15, false);  // passive
+    } else if (c == 'S') {
+      imk_service_scan_dump(15, true);   // active: also reads scan responses
     } else if (c == 'p' || c == 'P') {
       imk_crypto_dump_slots();
     } else if (c == 'u' || c == 'U') {
@@ -76,7 +78,7 @@ void app_main(void) {
   imk_keystore_init();
   imk_proto_init(imk_service_respond);
   imk_service_start();
-  ESP_LOGI(TAG, "immurok-esp32 boot; console: d=download r=restart w=wipe-fp i=info p=slots u=unbind-hosts c=led-sweep s=ble-scan");
+  ESP_LOGI(TAG, "immurok-esp32 boot; console: d=download r=restart w=wipe-fp i=info p=slots u=unbind-hosts c=led-sweep s/S=ble-scan(passive/active)");
   (void)prompt;
 
   // On a fingerprint touch: during pairing it drives the ECDH pubkey exchange;
