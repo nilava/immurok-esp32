@@ -111,7 +111,39 @@ Notes from building this:
 Pin definitions live at the top of [`main/fingerprint.c`](main/fingerprint.c) if you need
 to move anything.
 
-## Build and flash
+## Flash a prebuilt binary (no ESP-IDF needed)
+
+If you just want a working device and don't intend to modify the firmware, grab the
+latest [**release**](https://github.com/nilava/immurok-esp32/releases) and flash the
+merged image. You need Python and `esptool`, nothing else:
+
+```bash
+pip install esptool
+
+# One file, flashed at offset 0 — contains bootloader + partition table + app.
+esptool.py --chip esp32s3 write_flash 0x0 immurok-esp32-vX.Y.Z-merged.bin
+```
+
+Add `-p PORT` if it can't find the board (`/dev/cu.usbmodem101`, `/dev/ttyACM0`, `COM7` —
+see the port table [below](#4-flash)). If flashing fails, hold **BOOT**, tap **RESET**,
+release **BOOT**, and retry.
+
+**Verify what you're flashing.** Each release ships a `SHA256SUMS` file:
+
+```bash
+shasum -a 256 -c SHA256SUMS
+```
+
+> **A prebuilt binary is a trust decision.** You are running a security device on a
+> stranger's compiled artifact. The checksums prove the file matches what I uploaded —
+> they prove nothing about what I put in it. If that matters to you, and for a
+> fingerprint authenticator it reasonably might, **build from source instead** using the
+> instructions below. The build is reproducible from a clean checkout with ESP-IDF v5.3.2.
+
+To erase everything and start fresh (this destroys pairing keys, fingerprints and vault
+contents): `esptool.py --chip esp32s3 erase_flash`
+
+## Build from source
 
 Written assuming you have never used ESP-IDF before. If you have, it is just
 `idf.py set-target esp32s3 && idf.py flash monitor`.
