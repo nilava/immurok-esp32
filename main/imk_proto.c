@@ -17,6 +17,7 @@ static const char *TAG = "imk_proto";
 // Opcodes (immurok protocol subset for Phase 5A).
 #define CMD_GET_STATUS    0x01
 #define CMD_GET_BATT_RAW  0x02
+#define CMD_GET_CONN_PARAMS 0x03
 #define CMD_ENROLL_START  0x10
 #define CMD_ENROLL_CANCEL 0x11
 #define CMD_DELETE_FP     0x12
@@ -255,6 +256,22 @@ void imk_proto_handle(const uint8_t *pkt, size_t len) {
       s_gate = GATE_NONE;
       s_enroll_requested = false;
       send1(ST_OK);
+      break;
+    }
+
+    case CMD_GET_CONN_PARAMS: {
+      // [0x03][OK][interval:2 BE][latency:2 BE][timeout:2 BE] — the values the
+      // link is ACTUALLY running, not the ones conn_param_timer_cb asked for.
+      // Note this one echoes the cmd byte (the app checks r[0]==0x03 && r[1]==OK),
+      // unlike the status-first replies elsewhere in this protocol.
+      uint16_t iv = 0, lat = 0, to = 0;
+      if (!imk_service_conn_params(&iv, &lat, &to)) { send2(CMD_GET_CONN_PARAMS, ST_ERROR); break; }
+      uint8_t body[8] = {CMD_GET_CONN_PARAMS, ST_OK,
+                         (uint8_t)(iv >> 8),  (uint8_t)(iv & 0xff),
+                         (uint8_t)(lat >> 8), (uint8_t)(lat & 0xff),
+                         (uint8_t)(to >> 8),  (uint8_t)(to & 0xff)};
+      send_raw(body, sizeof(body));
+      ESP_LOGI(TAG, "GET_CONN_PARAMS: interval=%u latency=%u timeout=%u", iv, lat, to);
       break;
     }
 

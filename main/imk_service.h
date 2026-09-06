@@ -20,6 +20,11 @@ void imk_service_switch_host(const uint8_t addr[6], uint8_t atype);
 
 bool imk_service_connected(void);
 
+// The link-layer connection parameters actually in force (BLE native units:
+// interval x1.25ms, latency in connection events, timeout x10ms). False when
+// disconnected or before the first parameter update has been observed.
+bool imk_service_conn_params(uint16_t *interval, uint16_t *latency, uint16_t *timeout);
+
 // Proximity feasibility probe: passively survey nearby BLE advertisers for
 // `seconds` and log each one's name, address, RSSI and advertising cadence.
 // Blocks — call from the console task, not from a BLE callback.

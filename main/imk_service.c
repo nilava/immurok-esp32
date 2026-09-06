@@ -122,6 +122,13 @@ static uint16_t h_cmd_val, h_resp_val, h_resp_cccd;
 
 static esp_gatt_if_t s_gatts_if = ESP_GATT_IF_NONE;
 static uint16_t s_conn_id;
+
+// Link-layer parameters as ACTUALLY negotiated, reported by the controller on
+// every conn-param update. Distinct from what conn_param_timer_cb *requests* —
+// the central is free to grant something else, which is exactly why the app
+// added GET_CONN_PARAMS (0x03): it wants the effective values, not our wishes.
+static uint16_t s_ll_interval, s_ll_latency, s_ll_timeout;
+
 static bool s_connected;
 static bool s_notify_enabled;
 static int s_stage;  // which service table is being created
@@ -349,6 +356,14 @@ void imk_service_respond(const uint8_t *data, size_t len) {
   esp_ble_gatts_send_indicate(s_gatts_if, s_conn_id, h_resp_val, len, (uint8_t *)data, false);
 }
 
+bool imk_service_conn_params(uint16_t *interval, uint16_t *latency, uint16_t *timeout) {
+  if (!s_connected || s_ll_interval == 0) return false;
+  if (interval) *interval = s_ll_interval;
+  if (latency) *latency = s_ll_latency;
+  if (timeout) *timeout = s_ll_timeout;
+  return true;
+}
+
 bool imk_service_connected(void) { return s_connected; }
 
 static void create_next_table(esp_gatt_if_t gatts_if) {
@@ -387,6 +402,14 @@ static void gap_handler(esp_gap_ble_cb_event_t event, esp_ble_gap_cb_param_t *pa
           ESP_LOGI(TAG, "host switch complete");
         }
       }
+      break;
+    case ESP_GAP_BLE_UPDATE_CONN_PARAMS_EVT:
+      s_ll_interval = param->update_conn_params.conn_int;
+      s_ll_latency  = param->update_conn_params.latency;
+      s_ll_timeout  = param->update_conn_params.timeout;
+      ESP_LOGI(TAG, "conn params now: interval=%u (%.1fms) latency=%u timeout=%u (%ums)",
+               s_ll_interval, s_ll_interval * 1.25f, s_ll_latency,
+               s_ll_timeout, s_ll_timeout * 10);
       break;
     case ESP_GAP_BLE_SEC_REQ_EVT:
       esp_ble_gap_security_rsp(param->ble_security.ble_req.bd_addr, true);
@@ -460,6 +483,7 @@ static void gatts_handler(esp_gatts_cb_event_t event, esp_gatt_if_t gatts_if,
       s_notify_enabled = false;
       esp_timer_stop(s_conn_param_timer);
       imk_proto_on_disconnect();
+      s_ll_interval = s_ll_latency = s_ll_timeout = 0;
       fingerprint_led_set_connected(false);
       adv_params.adv_filter_policy = s_switch_pending
           ? ADV_FILTER_ALLOW_SCAN_ANY_CON_WLST
