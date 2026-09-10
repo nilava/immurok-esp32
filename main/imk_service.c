@@ -135,15 +135,27 @@ static int s_stage;  // which service table is being created
 static uint8_t s_peer_bda[6];
 static esp_timer_handle_t s_conn_param_timer;
 
-// Deferred low-power connection parameters (immurok recipe: 30/50ms, latency
-// 29, 6s supervision), requested ~30s after connect so discovery is long done.
+// Slave latency lets a peripheral SKIP connection events to save power. This
+// device is USB-powered and never sleeps — it drives a UART sensor and an RGB
+// ring continuously — so latency buys it nothing, while costing a great deal
+// of link margin: at latency 29 and a 50ms interval the link can go 1.5s
+// between events against a 6s supervision timeout, i.e. ~4 events of slack.
+// macOS tolerates that; other stacks are less forgiving, and a drop shows up
+// as a connect/disconnect loop roughly every 30s (when this timer fires).
+// Set to 29 to restore immurok's original recipe if ever needed.
+#define IMK_CONN_LATENCY 0
+
+// Deferred connection parameters (30/50ms, 6s supervision), requested ~30s
+// after connect so host service discovery is long done.
 static void conn_param_timer_cb(void *arg) {
   (void)arg;
   if (!s_connected) return;
-  esp_ble_conn_update_params_t cp = {.min_int = 24, .max_int = 40, .latency = 29, .timeout = 600};
+  esp_ble_conn_update_params_t cp = {.min_int = 24, .max_int = 40,
+                                     .latency = IMK_CONN_LATENCY, .timeout = 600};
   memcpy(cp.bda, s_peer_bda, sizeof(cp.bda));
   esp_ble_gap_update_conn_params(&cp);
-  ESP_LOGI(TAG, "requested low-power conn params");
+  ESP_LOGI(TAG, "requested conn params: interval 30-50ms latency %d timeout 6s",
+           IMK_CONN_LATENCY);
 }
 
 // Advertise flags + name + keyboard appearance + the HID service UUID so macOS
@@ -407,7 +419,8 @@ static void gap_handler(esp_gap_ble_cb_event_t event, esp_ble_gap_cb_param_t *pa
       s_ll_interval = param->update_conn_params.conn_int;
       s_ll_latency  = param->update_conn_params.latency;
       s_ll_timeout  = param->update_conn_params.timeout;
-      ESP_LOGI(TAG, "conn params now: interval=%u (%.1fms) latency=%u timeout=%u (%ums)",
+      ESP_LOGI(TAG, "conn params now: status=%d interval=%u (%.1fms) latency=%u timeout=%u (%ums)",
+               param->update_conn_params.status,
                s_ll_interval, s_ll_interval * 1.25f, s_ll_latency,
                s_ll_timeout, s_ll_timeout * 10);
       break;
@@ -475,7 +488,10 @@ static void gatts_handler(esp_gatts_cb_event_t event, esp_gatt_if_t gatts_if,
       imk_crypto_select_host(s_peer_bda);
       esp_timer_start_once(s_conn_param_timer, 30 * 1000 * 1000);
       fingerprint_led_set_connected(true);
-      ESP_LOGI(TAG, "host connected");
+      ESP_LOGI(TAG, "host connected: %02x:%02x:%02x:%02x:%02x:%02x slot=%d paired=%d",
+               s_peer_bda[0], s_peer_bda[1], s_peer_bda[2],
+               s_peer_bda[3], s_peer_bda[4], s_peer_bda[5],
+               imk_crypto_active_slot(), imk_crypto_is_paired() ? 1 : 0);
       break;
     }
     case ESP_GATTS_DISCONNECT_EVT:
@@ -488,7 +504,12 @@ static void gatts_handler(esp_gatts_cb_event_t event, esp_gatt_if_t gatts_if,
       adv_params.adv_filter_policy = s_switch_pending
           ? ADV_FILTER_ALLOW_SCAN_ANY_CON_WLST
           : ADV_FILTER_ALLOW_SCAN_ANY_CON_ANY;
-      ESP_LOGI(TAG, "host disconnected; re-advertising%s",
+      // The reason code is the whole diagnosis for a flapping link:
+      // 0x08 supervision timeout (radio/params), 0x13 remote terminated
+      // (the host chose to drop us), 0x16 local terminated, 0x3E failed to
+      // establish, 0x22 LMP timeout.
+      ESP_LOGW(TAG, "host disconnected: reason 0x%02x%s",
+               param->disconnect.reason,
                s_switch_pending ? " (whitelist: switch target)" : "");
       esp_ble_gap_start_advertising(&adv_params);
       break;
