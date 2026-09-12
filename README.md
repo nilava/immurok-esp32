@@ -20,7 +20,7 @@ Touch the sensor to unlock your Mac or Windows PC. Hold for two seconds to lock 
 binds to two computers at once and hops between them on a dedicated fingerprint, and it
 carries an on-device SSH key vault and TOTP vault that sign only after a fingerprint.
 
-![Touch to unlock, hold to lock](media/demo.gif)
+<img src="media/demo.gif" alt="Touch to unlock, hold to lock" width="480">
 
 *Touch to unlock the Mac; hold for two seconds to lock it again.*
 
