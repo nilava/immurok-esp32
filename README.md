@@ -20,7 +20,7 @@ Touch the sensor to unlock your Mac or Windows PC. Hold for two seconds to lock 
 binds to two computers at once and hops between them on a dedicated fingerprint, and it
 carries an on-device SSH key vault and TOTP vault that sign only after a fingerprint.
 
-<img src="media/demo.gif" alt="Touch to unlock, hold to lock" width="480">
+<img src="media/demo.gif" alt="Touch to unlock, hold to lock" width="420">
 
 *Touch to unlock the Mac; hold for two seconds to lock it again.*
 
@@ -313,17 +313,23 @@ opt-in "screen lock" setting to be turned on.
 
 ### Ring LED language
 
-| Ring | Meaning |
-|---|---|
-| Steady purple | Ready |
-| Breathing red | No computer reachable |
-| Breathing purple | Reading your touch |
-| Green | Recognised *(the sensor's own indicator — see quirks)* |
-| Steady red | Not recognised |
-| Breathing cyan | Verify an enrolled finger to proceed |
-| Breathing blue | Enrol: place finger / switching hosts |
-| Steady cyan | Enrol: lift finger |
-| Steady blue | Lock request sent |
+Every state the ring can be in, as it actually looks:
+
+| Ring | State | When you see it |
+|:---:|---|---|
+| <img src="docs/anim/led-ready.gif" width="46"> | Steady purple | Ready and paired to a host |
+| <img src="docs/anim/led-no-host.gif" width="46"> | Breathing red | No computer reachable |
+| <img src="docs/anim/led-reading.gif" width="46"> | Breathing purple | Reading your touch |
+| <img src="docs/anim/led-matched.gif" width="46"> | Green | Recognised — *the sensor's own indicator, see [quirks](#zw101-quirks-worth-knowing)* |
+| <img src="docs/anim/led-no-match.gif" width="46"> | Steady red | Not recognised |
+| <img src="docs/anim/led-verify.gif" width="46"> | Breathing cyan | Verify an enrolled finger to proceed (any gated action) |
+| <img src="docs/anim/led-place-finger.gif" width="46"> | Breathing blue | Enrol: place finger — also shown while switching hosts |
+| <img src="docs/anim/led-lift-finger.gif" width="46"> | Steady cyan | Enrol: lift finger |
+| <img src="docs/anim/led-lock-sent.gif" width="46"> | Steady blue | Lock request sent (2-second hold) |
+| <img src="docs/anim/led-asleep.gif" width="46"> | Dark | Asleep — nothing for 3 minutes; any touch wakes it |
+
+Only resting states sleep. Anything active or waiting — reading, enrolling, a gate armed
+for your finger, switching hosts — stays lit for as long as it takes.
 
 ### Serial console
 
