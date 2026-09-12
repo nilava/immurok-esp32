@@ -91,6 +91,7 @@ void app_main(void) {
       continue;
     }
     imk_proto_gate_tick();  // expire a stale fingerprint gate (25s)
+    fingerprint_led_tick();  // dark the ring after a long idle stretch
     if (fingerprint_present()) {
       // Stamp when the finger actually landed. The long-press window has to
       // be measured from here, not from after the match: the search alone

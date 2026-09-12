@@ -57,7 +57,8 @@ typedef enum {
   FP_LED_PAIRING,
   FP_LED_SWITCHING,   // breathing blue: handing off to the other host
   FP_LED_LOCK_SENT,   // steady blue: long-press lock request sent
-  FP_LED_AUTH_WAIT,  // breathing: verify an enrolled finger to proceed (any gate)
+  FP_LED_AUTH_WAIT,   // breathing: verify an enrolled finger to proceed (any gate)
+  FP_LED_ASLEEP,      // ring dark: nothing has happened for a while
 } fp_led_state_t;
 
 void fingerprint_led_state(fp_led_state_t s);
@@ -73,7 +74,14 @@ void fingerprint_led_off(void);  // force dark, bypassing the repaint dedupe
 // last match was longer ago than the window.
 void fingerprint_led_settle(void);
 void fingerprint_led_set_connected(bool connected);  // steers idle color
-void fingerprint_led_idle(void);   // purple when connected, yellow when not
+void fingerprint_led_idle(void);   // purple when connected, red-breathe when not
+
+// Ring idle-sleep. The ring is otherwise lit 24/7, which is the largest steady
+// load on a desk device. Call tick() periodically; once the ring has sat in a
+// resting state (idle or unreachable) untouched for the timeout it goes dark,
+// and any touch relights it through the normal state paints.
+void fingerprint_led_tick(void);
+void fingerprint_led_note_activity(void);
 void fingerprint_led_sweep(void);  // diagnostic: cycle the 7 colors, 2s each
 
 // Legacy shims (old bitmask call sites map to nearest state).

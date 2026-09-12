@@ -314,6 +314,7 @@ void fingerprint_led_state(fp_led_state_t s) {
     case FP_LED_SWITCHING:    aura_breathe(C_BLUE); break;
     case FP_LED_LOCK_SENT:    aura_steady(C_BLUE); break;
     case FP_LED_AUTH_WAIT:    aura_breathe(C_CYAN); break;
+    case FP_LED_ASLEEP:       aura_off(); break;
   }
 }
 
@@ -328,8 +329,25 @@ void fingerprint_led(uint8_t color, bool steady) {
 
 void fingerprint_led_breathe(uint8_t color) { (void)color; fingerprint_led_state(FP_LED_ENROLL_PLACE); }
 
+// Ring idle-sleep: the ring is lit continuously otherwise, which on a device
+// that sits on a desk all day is both the biggest steady power draw and a light
+// nobody asked for at 3am. Only resting states sleep — an active or waiting
+// state (reading, enrolling, gate armed, switching) must stay visible however
+// long it takes.
+#define LED_IDLE_SLEEP_MS (3 * 60 * 1000)
+static TickType_t s_led_activity;
+
+void fingerprint_led_note_activity(void) { s_led_activity = xTaskGetTickCount(); }
+
+void fingerprint_led_tick(void) {
+  if (s_current_state != FP_LED_IDLE && s_current_state != FP_LED_UNREACHABLE) return;
+  if ((xTaskGetTickCount() - s_led_activity) < pdMS_TO_TICKS(LED_IDLE_SLEEP_MS)) return;
+  fingerprint_led_state(FP_LED_ASLEEP);
+}
+
 void fingerprint_led_idle(void) {
   if (s_led_locked) return;
+  fingerprint_led_note_activity();   // returning to rest restarts the countdown
   fingerprint_led_state(s_host_connected ? FP_LED_IDLE : FP_LED_UNREACHABLE);
 }
 
