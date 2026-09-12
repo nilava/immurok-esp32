@@ -20,3 +20,13 @@ CONFIG_ESP_CONSOLE_USB_SERIAL_JTAG=y
 
 # HKDF for immurok shared-key derivation
 CONFIG_MBEDTLS_HKDF_C=y
+
+# BLE modem sleep: let the controller power down its radio between connection
+# events. Matters more since slave latency went to 0 (the radio now wakes for
+# every event instead of skipping up to 29), and recovers most of that cost
+# without giving up the link margin that fixed the Windows host.
+# Clock source must be the MAIN XTAL: this board has no external 32kHz crystal
+# (CONFIG_RTC_CLK_SRC_INT_RC), so selecting EXT_32K_XTAL would break BLE.
+CONFIG_BT_CTRL_MODEM_SLEEP=y
+CONFIG_BT_CTRL_MODEM_SLEEP_MODE_1=y
+CONFIG_BT_CTRL_LPCLK_SEL_MAIN_XTAL=y
